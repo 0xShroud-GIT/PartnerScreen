@@ -1,15 +1,16 @@
 name: Import canonical PartnerScreen tree
 
 on:
-  issues:
-    types: [opened]
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   import:
-    if: github.event.issue.title == 'RUN_PARTNERSCREEN_CANONICAL_IMPORT'
+    if: github.repository == '0xShroud-GIT/PartnerScreen'
     runs-on: ubuntu-latest
     steps:
       - name: Check out staging branch
@@ -41,19 +42,17 @@ jobs:
           test -f /tmp/partnerscreen-canonical/AGENTS.md
           test -f /tmp/partnerscreen-canonical/CHECKPOINT.md
           test -f /tmp/partnerscreen-canonical/package.json
+          test -f /tmp/partnerscreen-canonical/package-lock.json
           test -d /tmp/partnerscreen-canonical/app
           test -d /tmp/partnerscreen-canonical/src
           test -d /tmp/partnerscreen-canonical/modules
           test -d /tmp/partnerscreen-canonical/tests
           test -d /tmp/partnerscreen-canonical/docs
 
-          cp .github/workflows/import-partnerscreen.yml /tmp/import-partnerscreen.yml
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -a /tmp/partnerscreen-canonical/. .
-          mkdir -p .github/workflows
-          cp /tmp/import-partnerscreen.yml .github/workflows/import-partnerscreen.yml
-
           test ! -e .import
+          test ! -e .github
 
           git config user.name '0xShroud-GIT'
           git config user.email '0xshroud.me@gmail.com'
