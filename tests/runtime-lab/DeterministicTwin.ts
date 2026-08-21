@@ -2,10 +2,13 @@ import { PartnerScreenTwin } from './PartnerScreenTwin';
 import { settleMicrotasks } from './VirtualClock';
 
 /**
- * Production controllers intentionally schedule future request/reconnect/stats timers.
- * A normal lab flush must never fast-forward through those timers implicitly: doing so
- * would turn a harmless 2-second stats poll into an infinite "run until idle" loop and,
- * worse, would hide deadline ownership bugs.
+ * Canonical Runtime Laboratory twin used by tests and P0 remediation.
+ *
+ * PartnerScreenTwin owns the production-controller wiring. This subclass owns the
+ * deterministic clock policy: a normal flush must never fast-forward through future
+ * request/reconnect/stats timers implicitly. Doing so would turn a harmless recurring
+ * stats poll into an infinite "run until idle" loop and, worse, would hide deadline
+ * ownership bugs.
  *
  * Use advanceBy()/flushUntil() only when a scenario deliberately moves time forward.
  */
@@ -35,6 +38,8 @@ export class DeterministicPartnerScreenTwin extends PartnerScreenTwin {
   }
 
   override async flushUntil(predicate: () => boolean, maxCycles = 4_000): Promise<void> {
+    const startedAt = this.clock.nowMs();
+    const maxVirtualAdvanceMs = 120_000;
     let stagnantRounds = 0;
     for (let cycle = 0; cycle < maxCycles; cycle += 1) {
       if (predicate()) return;
@@ -43,6 +48,7 @@ export class DeterministicPartnerScreenTwin extends PartnerScreenTwin {
 
       const next = this.clock.nextDueMs();
       if (next !== null) {
+        if (next - startedAt > maxVirtualAdvanceMs) break;
         stagnantRounds = 0;
         await this.clock.advanceTo(next);
         continue;
@@ -58,6 +64,9 @@ export class DeterministicPartnerScreenTwin extends PartnerScreenTwin {
         stagnantRounds = 0;
       }
     }
-    throw new Error('Deterministic PartnerScreen twin condition did not converge.');
+    throw new Error(`Deterministic PartnerScreen twin condition did not converge within ${maxVirtualAdvanceMs}ms virtual time.`);
   }
 }
+
+/** Prefer this semantic name in new P0 regression suites. */
+export { DeterministicPartnerScreenTwin as PartnerScreenRuntimeLab };
