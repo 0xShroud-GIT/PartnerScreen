@@ -23,12 +23,14 @@ jobs:
     timeout-minutes: 60
 
     env:
-      PARTNERSCREEN_BUILD_COMMIT: ${{ github.sha }}
+      PARTNERSCREEN_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
       PARTNERSCREEN_ABIS: arm64-v8a
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -119,7 +121,7 @@ jobs:
       - name: Upload development APK
         uses: actions/upload-artifact@v4
         with:
-          name: partnerscreen-dev-apk-${{ github.sha }}
+          name: partnerscreen-dev-apk-${{ env.PARTNERSCREEN_BUILD_COMMIT }}
           if-no-files-found: error
           retention-days: 14
           path: |
