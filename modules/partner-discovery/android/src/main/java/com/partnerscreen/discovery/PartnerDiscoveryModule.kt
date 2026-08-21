@@ -63,6 +63,7 @@ class PartnerDiscoveryModule : Module() {
   @Volatile private var registeredServiceName: String? = null
   private var multicastLock: WifiManager.MulticastLock? = null
   private var pendingStart: PendingStart? = null
+  private val serviceInfoCallbacks = HashMap<String, NsdManager.ServiceInfoCallback>()
 
   override fun definition() = ModuleDefinition {
     Name("PartnerDiscovery")
@@ -306,40 +307,67 @@ class PartnerDiscoveryModule : Module() {
   }
 
   private fun resolveService(manager: NsdManager, item: PreparedAdvertisement, serviceInfo: NsdServiceInfo) {
+    // API 34+: resolveService is deprecated because the snapshot can go stale immediately.
+    // registerServiceInfoCallback keeps this one discovered service continuously updated.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      watchServiceInfo(manager, item, serviceInfo)
+      return
+    }
+    resolveServiceLegacy(manager, item, serviceInfo)
+  }
+
+  private fun watchServiceInfo(manager: NsdManager, item: PreparedAdvertisement, serviceInfo: NsdServiceInfo) {
+    val key = serviceInfo.serviceName ?: return
+    synchronized(stateLock) {
+      if (!isCurrentLocked(item.generation)) return
+      if (serviceInfoCallbacks.containsKey(key)) return
+    }
+    val callback = object : NsdManager.ServiceInfoCallback {
+      override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
+        synchronized(stateLock) { serviceInfoCallbacks.remove(key) }
+      }
+
+      override fun onServiceUpdated(updated: NsdServiceInfo) {
+        emitResolvedIfTrusted(item, updated)
+      }
+
+      override fun onServiceLost() {
+        synchronized(stateLock) { serviceInfoCallbacks.remove(key) }
+        if (!isCurrent(item.generation)) return
+        if (key == registeredServiceName) return
+        sendEvent(
+          "onPartnerDiscoveryEvent",
+          mapOf("type" to "service_lost", "serviceName" to key),
+        )
+      }
+
+      override fun onServiceInfoCallbackUnregistered() {
+        synchronized(stateLock) { serviceInfoCallbacks.remove(key) }
+      }
+    }
+    val registered = synchronized(stateLock) {
+      if (!isCurrentLocked(item.generation) || serviceInfoCallbacks.containsKey(key)) false
+      else {
+        serviceInfoCallbacks[key] = callback
+        true
+      }
+    }
+    if (!registered) return
+    try {
+      manager.registerServiceInfoCallback(serviceInfo, callbackExecutor, callback)
+    } catch (_: Exception) {
+      synchronized(stateLock) { serviceInfoCallbacks.remove(key) }
+    }
+  }
+
+  private fun resolveServiceLegacy(manager: NsdManager, item: PreparedAdvertisement, serviceInfo: NsdServiceInfo) {
     val listener = object : NsdManager.ResolveListener {
       override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
         // The LAN is untrusted and unrelated/broken services are expected. Ignore individual failures.
       }
 
       override fun onServiceResolved(resolved: NsdServiceInfo) {
-        if (!isCurrent(item.generation)) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-          val network = resolved.network
-          if (network != null && network != item.wifi.network) return
-        }
-        val host = resolvedPrivateIpv4(resolved) ?: return
-        val attrs = resolved.attributes
-        val version = decodeAttribute(attrs["v"]) ?: return
-        val hint = decodeAttribute(attrs["h"])?.lowercase() ?: return
-        val nonce = decodeAttribute(attrs["n"])?.lowercase() ?: return
-        val proof = decodeAttribute(attrs["p"])?.lowercase() ?: return
-        if (version != PROTOCOL_VERSION || !HINT_RE.matches(hint) || !NONCE_RE.matches(nonce) || !PROOF_RE.matches(proof)) return
-        if (resolved.port !in 1..65535) return
-
-        sendEvent(
-          "onPartnerDiscoveryEvent",
-          mapOf(
-            "type" to "service_resolved",
-            "service" to mapOf(
-              "serviceName" to resolved.serviceName,
-              "host" to host,
-              "port" to resolved.port,
-              "peerHint" to hint,
-              "nonce" to nonce,
-              "proof" to proof,
-            ),
-          ),
-        )
+        emitResolvedIfTrusted(item, resolved)
       }
     }
     try {
@@ -353,6 +381,37 @@ class PartnerDiscoveryModule : Module() {
     } catch (_: Exception) {
       // An unrelated or disappearing LAN service must not affect trusted availability.
     }
+  }
+
+  private fun emitResolvedIfTrusted(item: PreparedAdvertisement, resolved: NsdServiceInfo) {
+    if (!isCurrent(item.generation)) return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      val network = resolved.network
+      if (network != null && network != item.wifi.network) return
+    }
+    val host = resolvedPrivateIpv4(resolved) ?: return
+    val attrs = resolved.attributes
+    val version = decodeAttribute(attrs["v"]) ?: return
+    val hint = decodeAttribute(attrs["h"])?.lowercase() ?: return
+    val nonce = decodeAttribute(attrs["n"])?.lowercase() ?: return
+    val proof = decodeAttribute(attrs["p"])?.lowercase() ?: return
+    if (version != PROTOCOL_VERSION || !HINT_RE.matches(hint) || !NONCE_RE.matches(nonce) || !PROOF_RE.matches(proof)) return
+    if (resolved.port !in 1..65535) return
+
+    sendEvent(
+      "onPartnerDiscoveryEvent",
+      mapOf(
+        "type" to "service_resolved",
+        "service" to mapOf(
+          "serviceName" to resolved.serviceName,
+          "host" to host,
+          "port" to resolved.port,
+          "peerHint" to hint,
+          "nonce" to nonce,
+          "proof" to proof,
+        ),
+      ),
+    )
   }
 
   private fun resolvedPrivateIpv4(serviceInfo: NsdServiceInfo): String? {
@@ -412,6 +471,7 @@ class PartnerDiscoveryModule : Module() {
     val manager = try { nsdManager() } catch (_: Exception) { null }
     val browse: NsdManager.DiscoveryListener?
     val registration: NsdManager.RegistrationListener?
+    val watchers: List<NsdManager.ServiceInfoCallback>
     val socket: ServerSocket?
     val lock: WifiManager.MulticastLock?
 
@@ -420,6 +480,8 @@ class PartnerDiscoveryModule : Module() {
       pendingToReject = if (rejectPending) pendingStart.also { pendingStart = null } else null
       browse = discoveryListener.also { discoveryListener = null }
       registration = registrationListener.also { registrationListener = null }
+      watchers = serviceInfoCallbacks.values.toList()
+      serviceInfoCallbacks.clear()
       socket = prepared?.socket
       prepared = null
       registeredServiceName = null

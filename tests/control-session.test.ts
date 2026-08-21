@@ -144,6 +144,25 @@ test('an authenticated active ControlSession survives loss/replacement of the li
   await a.close(); await settle();
 });
 
+test('a listener UUID stuffed into connectionId cannot invalidate the owned listener or an authenticated session', async () => {
+  const network = new FakeNetwork(), transportA = new FakeTransport('192.168.7.10', network), transportB = new FakeTransport('192.168.7.11', network);
+  const a = new ControlSession(transportA, cipher()), b = new ControlSession(transportB, cipher());
+  await a.activate({ pairId, localDeviceId: deviceA, partnerDeviceId: deviceB, pairSecretHex: secret });
+  await b.activate({ pairId, localDeviceId: deviceB, partnerDeviceId: deviceA, pairSecretHex: secret });
+  const bEvents: ControlSessionEvent[] = [];
+  b.subscribe((event) => bEvents.push(event));
+  await a.connect(await b.ensureListening()); await settle();
+  const owned = transportB.endpoint?.listenerId;
+  assert.ok(owned);
+  transportB.emit({ type: 'error', code: 'listener_failed', connectionId: owned }); await settle();
+  assert.equal(transportB.endpoint?.listenerId, owned); // connectionId is not listener ownership
+  assert.equal(bEvents.some((event) => event.type === 'error' || event.type === 'closed'), false);
+  assert.equal(transportB.links.size, 1);
+  await b.ensureListening();
+  assert.equal(transportB.endpoint?.listenerId, owned);
+  await a.close(); await settle();
+});
+
 test('Wi-Fi host change stops the old listener and binds a fresh one to the new host without re-pairing', async () => {
   const network = new FakeNetwork(), transport = new FakeTransport('192.168.6.10', network);
   const session = new ControlSession(transport, cipher());

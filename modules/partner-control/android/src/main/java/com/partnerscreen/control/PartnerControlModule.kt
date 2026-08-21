@@ -27,7 +27,9 @@ import java.util.concurrent.TimeoutException
 private const val MAX_FRAME_BYTES = 48 * 1024
 private const val CONNECT_TIMEOUT_MS = 5_000
 private const val SEND_TIMEOUT_MS = 4_000
-private const val TRANSPORT_WORKERS = 4
+private const val INBOUND_CLASSIFY_TIMEOUT_MS = 1_500
+private const val ACCEPT_WORKERS = 1
+private const val IO_WORKERS = 4
 
 private data class WifiEndpoint(val network: Network, val address: Inet4Address)
 private data class ListenerHandle(val socket: ServerSocket, val host: String)
@@ -37,7 +39,10 @@ class PartnerControlModule : Module() {
   private val listeners = ConcurrentHashMap<String, ListenerHandle>()
   private val connections = ConcurrentHashMap<String, ConnectionHandle>()
   private val connectionLock = Any()
-  private val executor: ExecutorService = Executors.newFixedThreadPool(TRANSPORT_WORKERS)
+  // Accepts must not share a pool with blocked reads/writes: a stuck TCP read must never
+  // starve listener accepts or control sends. Probe connect-and-close also classifies on IO.
+  private val acceptExecutor: ExecutorService = Executors.newFixedThreadPool(ACCEPT_WORKERS)
+  private val ioExecutor: ExecutorService = Executors.newFixedThreadPool(IO_WORKERS)
 
   override fun definition() = ModuleDefinition {
     Name("PartnerControl")
@@ -52,7 +57,7 @@ class PartnerControlModule : Module() {
       val id = UUID.randomUUID().toString()
       val host = wifi.address.hostAddress ?: throw IllegalStateException("Wi-Fi address is unavailable.")
       listeners[id] = ListenerHandle(server, host)
-      executor.execute { acceptLoop(id, server) }
+      acceptExecutor.execute { acceptLoop(id, server) }
       mapOf("listenerId" to id, "host" to host, "port" to server.localPort)
     }
 
@@ -83,7 +88,7 @@ class PartnerControlModule : Module() {
       val bytes = frame.toByteArray(StandardCharsets.UTF_8)
       require(bytes.isNotEmpty() && bytes.size <= MAX_FRAME_BYTES) { "Control frame size is invalid." }
       val handle = connections[connectionId] ?: throw IllegalStateException("Control connection is not active.")
-      val write = executor.submit {
+      val write = ioExecutor.submit {
         synchronized(handle.writeLock) {
           val output = DataOutputStream(handle.socket.getOutputStream())
           output.writeInt(bytes.size)
@@ -121,21 +126,61 @@ class PartnerControlModule : Module() {
         val socket = server.accept()
         socket.tcpNoDelay = true
         socket.keepAlive = true
-        val accepted = synchronized(connectionLock) {
-          if (connections.isNotEmpty()) false
-          else { registerConnectionLocked(socket, "inbound", listenerId); true }
-        }
-        if (!accepted) {
-          try { socket.close() } catch (_: Exception) { /* best effort */ }
-          emitError("busy", null)
-        }
+        // Classify off the accept thread so a slow first-frame wait cannot block further accepts.
+        ioExecutor.execute { classifyInbound(listenerId, socket) }
       } catch (_: Exception) {
-        if (!server.isClosed && listeners.containsKey(listenerId)) emitError("listener_failed", listenerId)
+        // Listener-scoped failure: emit listenerId, never stuff the listener UUID into connectionId.
+        if (!server.isClosed && listeners.containsKey(listenerId)) emitListenerError("listener_failed", listenerId)
         break
       }
     }
     listeners.remove(listenerId)
     try { server.close() } catch (_: Exception) { /* best effort */ }
+  }
+
+  private fun classifyInbound(listenerId: String, socket: Socket) {
+    // Reachability probes connect to the exact control port and close without a handshake frame.
+    // Those must never occupy the authenticated connection slot or emit a fake inbound session.
+    val firstFrame: ByteArray? = try {
+      socket.soTimeout = INBOUND_CLASSIFY_TIMEOUT_MS
+      val input = DataInputStream(socket.getInputStream())
+      val length = input.readInt()
+      if (length <= 0 || length > MAX_FRAME_BYTES) null
+      else {
+        val bytes = ByteArray(length)
+        input.readFully(bytes)
+        bytes
+      }
+    } catch (_: Exception) {
+      null
+    }
+    try { socket.soTimeout = 0 } catch (_: Exception) { /* best effort */ }
+    if (firstFrame == null) {
+      try { socket.close() } catch (_: Exception) { /* probe or junk */ }
+      return
+    }
+    if (!listeners.containsKey(listenerId)) {
+      firstFrame.fill(0)
+      try { socket.close() } catch (_: Exception) { /* stale listener */ }
+      return
+    }
+    val connectionId = synchronized(connectionLock) {
+      if (connections.isNotEmpty()) null
+      else registerConnectionLocked(socket, "inbound", listenerId)
+    }
+    if (connectionId == null) {
+      firstFrame.fill(0)
+      try { socket.close() } catch (_: Exception) { /* best effort */ }
+      emitError("busy", null)
+      return
+    }
+    sendEvent("onPartnerControlEvent", mapOf(
+      "type" to "message",
+      "connectionId" to connectionId,
+      "frame" to String(firstFrame, StandardCharsets.UTF_8),
+    ))
+    firstFrame.fill(0)
+    ioExecutor.execute { readLoop(connectionId, socket) }
   }
 
   private fun registerConnection(socket: Socket, direction: String, listenerId: String?): String = synchronized(connectionLock) {
@@ -149,7 +194,7 @@ class PartnerControlModule : Module() {
     val event = mutableMapOf<String, Any>("type" to "connected", "connectionId" to connectionId, "direction" to direction)
     if (listenerId != null) event["listenerId"] = listenerId
     sendEvent("onPartnerControlEvent", event)
-    executor.execute { readLoop(connectionId, socket) }
+    if (direction == "outbound") ioExecutor.execute { readLoop(connectionId, socket) }
     return connectionId
   }
 
