@@ -1,0 +1,9 @@
+appId: com.partnerscreen.app
+---
+- extendedWaitUntil:
+    visible: "The other phone confirmed you"
+    timeout: 15000
+- tapOn: "Confirm trusted partner"
+- extendedWaitUntil:
+    visible: "Trusted partner saved."
+    timeout: 15000
