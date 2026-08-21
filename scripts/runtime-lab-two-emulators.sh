@@ -60,6 +60,17 @@ adb -s "$ADB_B" install -r -t "$APK_PATH" >/dev/null
 adb -s "$ADB_A" shell run-as "$PACKAGE" true >/dev/null 2>&1 || fail "APK on $ADB_A is not debuggable"
 adb -s "$ADB_B" shell run-as "$PACKAGE" true >/dev/null 2>&1 || fail "APK on $ADB_B is not debuggable"
 
+# Level 3 is a pairing/session/WebRTC/renderer gate, not a notification-permission
+# qualification. Pre-grant POST_NOTIFICATIONS so Android's runtime dialog cannot
+# obscure the UI under test. Permission semantics remain covered by Level 2 and
+# physical milestone qualification.
+for serial in "$ADB_A" "$ADB_B"; do
+  sdk="$(adb -s "$serial" shell getprop ro.build.version.sdk | tr -d '\r')"
+  if [[ "$sdk" =~ ^[0-9]+$ ]] && (( sdk >= 33 )); then
+    adb -s "$serial" shell pm grant "$PACKAGE" android.permission.POST_NOTIFICATIONS >/dev/null
+  fi
+done
+
 workdir="$(mktemp -d)"
 cleanup() {
   rm -rf "$workdir"
