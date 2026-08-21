@@ -26,7 +26,7 @@ export class SimulatedNotificationPort implements RequestNotificationPort {
 
   async showRequestNotification(sessionId: string): Promise<boolean> {
     this.showAttempts.push(sessionId);
-    if (this.permission !== 'granted' || this.permission === 'channel_disabled') return false;
+    if (this.permission !== 'granted') return false;
     this.shownSessionId = sessionId;
     return true;
   }
@@ -146,8 +146,8 @@ function safeHostCandidate(host: string, port: number): string {
 }
 
 type MediaSessionLink = {
-  publisher?: SimulatedMediaPort;
-  requester?: SimulatedMediaPort;
+  publisher?: SimulatedMediaPort | undefined;
+  requester?: SimulatedMediaPort | undefined;
   connected: boolean;
 };
 
