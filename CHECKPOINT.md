@@ -1,48 +1,91 @@
 # PartnerScreen Checkpoint
 
-**Updated:** 2026-08-21  
-**Phase:** Mission 0 correction pass — Stabilize current PartnerScreen  
-**Working branch:** `arena/01a02594-partnerscreen` (session-fixed; requested `v2/gate0-stabilization` cannot be created in this Arena session)  
-**Base:** `5e6f70a5fe874525e6f7a6dbd24fc08b591fa859` (`main`)
+**Updated:** 2026-08-22  
+**Phase:** Mission 0R — Runtime Laboratory  
+**Working branch:** `m0r/runtime-laboratory`  
+**Base:** `1d09ae4dfec7f0d998b02bb7b92a89722d2c8f48` (`main`, merged Mission 0)
 
 ## Current truth
 
-Mission 0 source work plus the five merge-blocker corrections are complete on the session branch. The existing WebRTC fallback is deterministic and truthful at the source/prebuild layer:
+Mission 0 was merged and the exact merge commit successfully produced a native Android development APK in the manual GitHub qualification lane. Source/prebuild/native-compilation success did **not** translate into a reliable two-phone product.
 
-- native `getStats(RTCStatsCollectorCallback)` one-arg API
-- absolute initial usable-video deadline (15 seconds)
-- bounded reconnect: requester uses the 5s frame-grace deadline; sharer uses the 8s attempt watchdog
-- Error remains Error until explicit `recoverProductError()` / `clearError()`; availability only updates cached reachability
-- Stop → immediate Start: latest valid `ACTION_START` while stopping is copied and queued; old-session callbacks cannot own the replacement
-- incoming-request taps use `partnerscreen://incoming-request/<uuid>` plus native `OnNewIntent` and Expo Linking; stale IDs do nothing
-- notifier advances desired-generation when the session listener fires; a stale completed show is cleared before the queued generation proceeds; `activeSessionId` is set only after the current show succeeds
-- encoder bitrate warning is shown only for a sharer after a failed sender configure
-- PiP uses actual remote geometry and exits on session end
-- sanitized production media stats plumbed into controller/presentation
+Physical Mission 0Q against `1d09ae4dfec7f0d998b02bb7b92a89722d2c8f48` failed. Observed behavior included:
 
-## Source gate (this commit)
+- app freezes / severe responsiveness problems;
+- partner discovery materially slower than the previously working behavior;
+- `PairedAvailable` followed by control connection failures;
+- unreliable reconnect/recovery;
+- incoming notification permission not prompted reliably and requiring manual grant;
+- incoming request notification behavior dependent on app/process liveness;
+- MediaProjection consent and capture startup succeeding but no actual first rendered remote frame;
+- repeatable termination around the 15-second initial-video deadline;
+- duplicate `viewer_opened` and `keep_awake_enabled` ownership signals;
+- PiP not functioning;
+- session lifecycle generally unreliable.
 
-- `npm ci`: PASS (649 packages)
-- `npm run typecheck`: PASS
-- `npm run test:product`: PASS (175/175)
-- `npm run check:contracts`: PASS (13/13)
-- `npm run check:baseline`: PASS
-- `npm run sanitize`: PASS
-- `npm run config:check`: PASS
-- `npm run deps:check`: PASS
-- `CI=1 npx expo prebuild --platform android --no-install`: PASS (`supportsPictureInPicture="true"`)
+The 175/175 product tests and 13/13 static contracts from Mission 0 are therefore source evidence only. They are not device qualification.
 
-Native compile and physical behavior remain unproven. Prebuild is not a native compile. LIVE still means the first rendered remote frame.
+## Mission 0R purpose
 
-## Next work
+Before P0 runtime fixes, build a software-first qualification laboratory so failures become permanent reproducible scenarios instead of requiring a two-phone APK cycle for every edit.
 
-1. Review Mission 0 PR #10. Do not merge unless authorized.
-2. Do **not** start Mission 0Q (APK / Maestro / physical) until this PR is reviewed.
+Mission 0R is infrastructure-only:
+
+- two-peer software twin using the real PartnerScreen pairing/discovery/control/session/capture/media authorities;
+- deterministic virtual clock;
+- deterministic fault-injectable virtual LAN;
+- simulated Android notification/capture/media ports;
+- runtime ownership invariants;
+- seeded lifecycle/fault fuzzing;
+- Robolectric/native unit-test seams consumed by production Kotlin;
+- real Jitsi WebRTC synthetic-frame loopback instrumentation;
+- manual native/emulator qualification lanes;
+- known physical failures encoded as quarantined desired-behavior regressions.
+
+Mission 0R does **not** repair P0-A through P0-H, does not change the V2 product architecture, and does not claim runtime correctness.
+
+## Evidence status
+
+| Layer | Status |
+| --- | --- |
+| Mission 0 source/product tests | PASS — 175/175 at merged Mission 0 |
+| Mission 0 static contracts | PASS — 13/13 at merged Mission 0 |
+| Mission 0 native APK compile | PASS — exact `1d09ae4d...` manual qualification build |
+| Mission 0Q physical two-phone behavior | **FAIL** |
+| Mission 0R Node software twin | **Implementation in progress / not yet accepted** |
+| Mission 0R native JVM/Robolectric tests | **Scaffolded / not run in this mission** |
+| Mission 0R WebRTC instrumentation loopback | **Scaffolded / not run in this mission** |
+| Mission 1 | **Blocked** |
+
+## Build policy for Mission 0R
+
+Do not run:
+
+- Expo prebuild;
+- Gradle/native build;
+- APK workflow;
+- Maestro;
+- emulator qualification;
+- physical qualification.
+
+Only the Node/software Runtime Laboratory lane may run while the lab is being constructed. Native/emulator layers are manual-only infrastructure to use after source review.
+
+## Next gate
+
+1. Complete and review Mission 0R infrastructure.
+2. Run/repair the software-twin and fuzz source lane until green.
+3. Do **not** normalize known regressions to current broken behavior; P0 work must make those desired-behavior tests green.
+4. Implement P0-A through P0-H sequentially, proving each in the Runtime Laboratory.
+5. Only then build one frozen APK and repeat the smallest physical gate: availability → request → accept → consent → actual first rendered frame, repeatedly.
 
 ## High-risk invariants
 
-- LIVE requires the current renderer/session/track epoch's actual first frame.
-- Pairing survives Error recovery.
-- Availability updates must not silently clear Error.
-- No secrets, raw SDP, or full IPs in ordinary diagnostics/notifications.
-- Native compile and physical behavior remain unproven until Mission 0Q.
+- one active product session per device;
+- one viewer owner per requester session;
+- one capture owner per sharer session;
+- one peer-connection owner per media epoch;
+- LIVE requires the current renderer/session/track epoch's actual first rendered frame;
+- pair trust survives recoverable media failure;
+- stale sessions/endpoints/notifications cannot affect the current session;
+- notification session ID must equal the exact current `IncomingRequest`;
+- no secrets, raw SDP, ICE candidate strings, or full IPs in ordinary diagnostics.
