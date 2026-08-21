@@ -148,6 +148,7 @@ export class SimulatedDevice {
       this.pairingTransport,
       new NodePairingCrypto(new LabIdSource(`${options.seed}:pairing-crypto`)),
       clock.nowDate,
+      clock,
     );
 
     this.controlSession = new ControlSession(
@@ -165,6 +166,7 @@ export class SimulatedDevice {
       this.controlSession,
       this.diagnostics,
       clock.nowMs,
+      clock,
     );
     this.screenCaptureCoordinator = new ScreenCaptureCoordinator(this.capturePort, this.sessionController, this.diagnostics);
     this.mediaSessionController = new MediaSessionController(
@@ -422,35 +424,55 @@ export class PartnerScreenTwin {
     await this.flush();
   }
 
+  /** Drain only work due at the current logical time. Future timers never auto-fire. */
   async flush(maxCycles = 2_000): Promise<void> {
     let idleRounds = 0;
     for (let cycle = 0; cycle < maxCycles; cycle += 1) {
       await settleMicrotasks();
       const next = this.clock.nextDueMs();
-      if (next !== null) {
+      if (next !== null && next <= this.clock.nowMs()) {
         idleRounds = 0;
-        await this.clock.advanceTo(next);
+        await this.clock.advanceTo(this.clock.nowMs());
         continue;
       }
+
       await Promise.all([this.alice.waitForPairLifecycle(), this.bob.waitForPairLifecycle()]);
       await settleMicrotasks();
-      if (this.clock.nextDueMs() === null) {
+      const after = this.clock.nextDueMs();
+      if (after === null || after > this.clock.nowMs()) {
         idleRounds += 1;
         if (idleRounds >= 3) return;
       } else {
         idleRounds = 0;
       }
     }
-    throw new Error('PartnerScreenTwin did not become idle.');
+    throw new Error('PartnerScreenTwin did not drain current-time work.');
   }
 
+  /** Deliberately advance future logical time until the requested product condition is true. */
   async flushUntil(predicate: () => boolean, maxCycles = 4_000): Promise<void> {
+    let stagnantRounds = 0;
     for (let cycle = 0; cycle < maxCycles; cycle += 1) {
       if (predicate()) return;
       await settleMicrotasks();
+      if (predicate()) return;
+
       const next = this.clock.nextDueMs();
-      if (next !== null) await this.clock.advanceTo(next);
-      else await Promise.all([this.alice.waitForPairLifecycle(), this.bob.waitForPairLifecycle()]);
+      if (next !== null) {
+        stagnantRounds = 0;
+        await this.clock.advanceTo(next);
+        continue;
+      }
+
+      await Promise.all([this.alice.waitForPairLifecycle(), this.bob.waitForPairLifecycle()]);
+      await settleMicrotasks();
+      if (predicate()) return;
+      if (this.clock.nextDueMs() === null) {
+        stagnantRounds += 1;
+        if (stagnantRounds >= 8) break;
+      } else {
+        stagnantRounds = 0;
+      }
     }
     throw new Error('PartnerScreenTwin condition did not converge.');
   }
