@@ -182,9 +182,9 @@ jobs:
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
           disable-animations: true
           script: |
-            set -euo pipefail
+            set -eu
             APK="$(find artifacts/maestro-apk -type f -name '*.apk' -print -quit)"
-            if [[ -z "$APK" ]]; then
+            if [ -z "$APK" ]; then
               echo "Downloaded artifact did not contain an APK" >&2
               exit 1
             fi
