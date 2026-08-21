@@ -15,8 +15,13 @@ export class SimulatedControlFabric {
   private nextPort = 44000;
   private readonly registrations = new Map<string, ControlRegistration>();
   private readonly ids = new LabIdSource('runtime-lab-control-fabric');
+  discoveryFabric?: { removeServicesForHost(host: string): void };
 
   constructor(readonly network: VirtualNetwork) {}
+
+  hasEndpoint(host: string, port: number): boolean {
+    return this.registrations.has(`${host}:${port}`);
+  }
 
   allocate(transport: SimulatedControlTransport): ControlListenerEndpoint {
     const endpoint = { listenerId: this.ids.uuid(), host: transport.host, port: this.nextPort++ };
@@ -30,6 +35,10 @@ export class SimulatedControlFabric {
 
   makeEndpointStale(endpoint: ControlListenerEndpoint): void {
     this.release(endpoint);
+    // P0-A: stale control endpoint must not remain PairedAvailable. The discovery
+    // advertisement that proved this exact control host:port is now stale; remove it
+    // so peers receive service_lost and re-prove before becoming available again.
+    this.discoveryFabric?.removeServicesForHost(endpoint.host);
   }
 
   connect(source: SimulatedControlTransport, host: string, port: number): string {

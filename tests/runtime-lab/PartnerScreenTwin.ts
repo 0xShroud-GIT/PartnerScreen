@@ -383,6 +383,11 @@ export class PartnerScreenTwin {
     this.controlFabric = new SimulatedControlFabric(this.network);
     this.discoveryFabric = new SimulatedDiscoveryFabric(this.network);
     this.mediaFabric = new SimulatedMediaFabric(this.network);
+    // P0-A: discovery probe must validate the exact control endpoint; link fabrics so
+    // SimulatedDiscovery.probe can check control liveness and so stale control endpoints
+    // invalidate their discovery advertisements.
+    this.discoveryFabric.controlFabric = this.controlFabric;
+    this.controlFabric.discoveryFabric = this.discoveryFabric;
     this.alice = new SimulatedDevice({
       name: 'Alice',
       deviceId: '11111111-1111-4111-8111-111111111111',

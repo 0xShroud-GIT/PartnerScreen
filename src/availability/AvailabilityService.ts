@@ -29,6 +29,7 @@ interface ActiveAvailability {
   preparation: DiscoveryAdvertisementPreparation;
   localServiceName: string;
   matchedServiceName: string | null;
+  provenControl: { host: string; port: number } | null;
 }
 
 const SAFE_START_MESSAGES = new Set([
@@ -49,6 +50,7 @@ export class AvailabilityService {
   private readonly listeners = new Set<() => void>();
   private operationQueue: Promise<void> = Promise.resolve();
   private generation = 0;
+  private probeGeneration = 0;
   private active: ActiveAvailability | null = null;
   private lastPair: PairTrustMetadata | null = null;
   private readonly unsubscribeDiscovery: () => void;
@@ -101,7 +103,7 @@ export class AvailabilityService {
       const proof = await this.authenticator.createProof(pairSecretHex, { ...preparation, controlPort: controlEndpoint.port });
       const registration = await this.discovery.start(preparation.advertisementId, peerHint, proof);
       if (generation !== this.generation) { await this.discovery.stop().catch(() => undefined); return; }
-      this.active = { generation, pair, pairSecretHex, preparation, localServiceName: registration.serviceName, matchedServiceName: null };
+      this.active = { generation, pair, pairSecretHex, preparation, localServiceName: registration.serviceName, matchedServiceName: null, provenControl: null };
       this.setState({ kind: 'offline', pair, localAdvertised: true });
       await this.record('availability_started');
     } catch (error) {
@@ -116,6 +118,7 @@ export class AvailabilityService {
   private async stopActive(recordStop: boolean): Promise<void> {
     const hadActive = this.active !== null;
     this.generation += 1;
+    this.probeGeneration += 1;
     this.active = null;
     try { await this.discovery.stop(); } catch { await this.record('availability_failed'); }
     if (hadActive && recordStop) await this.record('availability_stopped');
@@ -127,12 +130,16 @@ export class AvailabilityService {
     if (event.type === 'service_resolved') { await this.handleResolved(active, event.service); return; }
     if (event.type === 'service_lost') {
       if (active.matchedServiceName !== event.serviceName) return;
+      this.probeGeneration += 1;
       active.matchedServiceName = null;
+      active.provenControl = null;
       this.setState({ kind: 'offline', pair: active.pair, localAdvertised: true });
       await this.record('availability_partner_lost');
       return;
     }
+    this.probeGeneration += 1;
     active.matchedServiceName = null;
+    active.provenControl = null;
     this.setState({ kind: 'offline', pair: active.pair, localAdvertised: true, message: 'Trusted discovery reported a local network error. PartnerScreen will remain fail-closed until the partner is proven reachable again.' });
     await this.record('availability_failed');
   }
@@ -148,13 +155,60 @@ export class AvailabilityService {
       nonce: service.nonce, host: service.host, port: service.port, controlPort,
     }, service.proof);
     if (!validProof || active.generation !== this.generation) return;
-    try { await this.discovery.probe(service.host, service.port); }
-    catch { await this.record('availability_probe_failed'); return; }
-    if (active.generation !== this.generation) return;
-    const changed = active.matchedServiceName !== service.serviceName;
-    active.matchedServiceName = service.serviceName;
-    this.setState({ kind: 'available', pair: active.pair, endpoint: { host: service.host, port: controlPort }, serviceName: service.serviceName });
-    if (changed) await this.record('availability_partner_found');
+    // discovered + authenticated != available. Request Screen may only use a control endpoint
+    // whose exact host:controlPort generation has been proved reachable.
+    if (
+      this.state.kind === 'available'
+      && this.state.endpoint.host === service.host
+      && this.state.endpoint.port === controlPort
+      && active.matchedServiceName === service.serviceName
+    ) {
+      return;
+    }
+    // Same advertised service with a new control port is a stale-generation replacement.
+    // A different service name may be a delayed NSD echo; do not demote until the new
+    // control endpoint is proved (or the matched service is lost).
+    if (
+      this.state.kind === 'available'
+      && active.matchedServiceName === service.serviceName
+      && (this.state.endpoint.host !== service.host || this.state.endpoint.port !== controlPort)
+    ) {
+      active.matchedServiceName = null;
+      active.provenControl = null;
+      this.setState({ kind: 'offline', pair: active.pair, localAdvertised: true });
+    }
+    const probeGeneration = ++this.probeGeneration;
+    void this.proveExactControlEndpoint(active.generation, probeGeneration, service, controlPort);
+  }
+
+  private async proveExactControlEndpoint(
+    availabilityGeneration: number,
+    probeGeneration: number,
+    service: ResolvedPartnerService,
+    controlPort: number,
+  ): Promise<void> {
+    try {
+      // Prove the authenticated control endpoint, never the NSD probe socket.
+      await this.discovery.probe(service.host, controlPort);
+    } catch {
+      await this.enqueue(async () => {
+        if (availabilityGeneration !== this.generation || probeGeneration !== this.probeGeneration) return;
+        await this.record('availability_probe_failed');
+      }).catch(() => undefined);
+      return;
+    }
+    await this.enqueue(async () => {
+      if (availabilityGeneration !== this.generation || probeGeneration !== this.probeGeneration) return;
+      const current = this.active;
+      if (!current || current.generation !== availabilityGeneration) return;
+      const changed = current.matchedServiceName !== service.serviceName
+        || current.provenControl?.host !== service.host
+        || current.provenControl?.port !== controlPort;
+      current.matchedServiceName = service.serviceName;
+      current.provenControl = { host: service.host, port: controlPort };
+      this.setState({ kind: 'available', pair: current.pair, endpoint: { host: service.host, port: controlPort }, serviceName: service.serviceName });
+      if (changed) await this.record('availability_partner_found');
+    }).catch(() => undefined);
   }
 
   private async record(kind: DiagnosticEventKind): Promise<void> { try { await this.diagnostics.append(kind); } catch { /* diagnostics never own availability */ } }
