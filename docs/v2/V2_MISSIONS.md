@@ -1,6 +1,6 @@
 # PartnerScreen V2 — Arena Mission Sequence
 
-**Status:** locked execution sequence.
+**Status:** locked execution sequence, amended after the failed Mission 0Q physical gate.
 
 Arena works one mission at a time. A mission may prepare evidence for the next mission, but it must not implement future missions early.
 
@@ -12,55 +12,114 @@ Arena works one mission at a time. A mission may prepare evidence for the next m
 - Never weaken security to match ZeroLink. Harvest its freshness, lifecycle, Wi-Fi Direct, rotation, reconnect, and viewer lessons only.
 - Never treat generated visual boards as functional requirements.
 - Do not merge a mission PR unless explicitly authorized.
+- A source/unit/static-contract pass never counts as Android physical proof.
 
-## Mission 0 — Stabilize current PartnerScreen
+## Mission 0 — Stabilize current PartnerScreen — historical result
 
-**Branch:** `v2/gate0-stabilization`
+Mission 0 was merged at `1d09ae4dfec7f0d998b02bb7b92a89722d2c8f48` after source/prebuild review.
 
-**Goal:** make the existing WebRTC implementation deterministic and trustworthy enough to remain the V2 fallback.
+It implemented source-level stabilization work including media deadlines/recovery, Stop→Start handling, notification routing, PiP/stat plumbing and diagnostics. The source gate passed, and the exact merged commit later compiled into a development APK.
 
-Implement only:
-- correct native WebRTC `getStats` API usage and verify new native-module source compatibility
-- absolute initial usable-video deadline
-- unconditional timeout for every reconnect attempt
-- one coordinated Error recovery path
-- Stop -> immediate Start capture race fix
-- notification permission + exact incoming-request routing + async generation/serialization safety
-- PiP real video geometry and terminal cleanup
-- real sanitized media-stats plumbing
-- truthful bitrate / `setParameters` / degraded / keep-awake reporting
-- production-path behavioral tests for the above
+Mission 0 is historical context. Do not re-run it as a new broad patch mission.
 
-**Source gate:**
+## Mission 0Q — Physical qualification — FAILED
+
+The exact Mission 0 merge commit compiled into an Android APK, but two-phone physical behavior failed. Observed failures included:
+
+- freezes/responsiveness problems;
+- slower partner discovery;
+- control failure after availability claimed the peer was available;
+- unreliable reconnect/recovery;
+- unreliable notification permission prompting and process-dependent incoming requests;
+- MediaProjection capture startup without an actual first rendered remote frame;
+- repeatable failure around the 15-second initial-video deadline;
+- duplicate Viewer/keep-awake ownership signals;
+- nonfunctional PiP;
+- generally unreliable session lifecycle.
+
+**Exit result:** FAIL. There is no known-good WebRTC fallback baseline yet.
+
+Mission 1 remains blocked.
+
+## Mission 0R — Runtime Laboratory
+
+**Branch:** `m0r/runtime-laboratory`
+
+**Goal:** make 90–95% of PartnerScreen qualification software-first so P0 repairs can be reproduced before another APK/two-phone cycle.
+
+Infrastructure only. Do not repair P0-A through P0-H during 0R.
+
+Implement:
+
+- two-peer software twin around the real production PairingService / AvailabilityService / ControlSession / SessionController / ScreenCaptureCoordinator / MediaSessionController;
+- deterministic virtual clock/scheduler;
+- deterministic virtual LAN with latency, jitter, loss, bandwidth, outage and stale-route controls;
+- simulated platform ports for discovery, pairing/control sockets, notification, capture consent and media events;
+- runtime ownership invariants;
+- seeded model/lifecycle/fault fuzzing with replayable seeds;
+- known physical failures as quarantined desired-behavior regression scenarios;
+- native JVM/Robolectric seams that are consumed by production Kotlin rather than duplicate test-only models;
+- synthetic-frame Jitsi WebRTC loopback instrumentation using the exact repository dependency;
+- manual-only native/emulator runners;
+- explicit proof-level documentation.
+
+**Fast source gate:**
+
 - `npm ci`
+- `npm run test:runtime-lab`
+- `npm run test:runtime-lab:fuzz`
 - `npm run typecheck`
-- `npm run test:product`
-- `npm run check:contracts`
-- `npm run check:baseline`
-- `npm run sanitize`
-- `npm run config:check`
-- `npm run deps:check`
-- `CI=1 npx expo prebuild --platform android --no-install`
+- existing source tests/contracts as appropriate
 
-**Do not run:** APK build, Maestro, Wi-Fi Direct work, Local Fast Path work, browser/backend work, theme redesign.
+**Do not run during 0R construction:**
 
-**Exit:** reviewed source/prebuild-green PR, with native compile still honestly labelled unproven until manual qualification.
+- Expo prebuild;
+- Gradle/native tests;
+- APK build;
+- Maestro;
+- emulator qualification;
+- physical qualification.
 
-## Mission 0Q — One manual physical qualification
+Native/emulator files may be added as manual-only infrastructure but are not executed until the lab source is reviewed.
 
-Run only after Mission 0 is reviewed.
+**Exit:** reviewed Runtime Laboratory with a green Node/twin/fuzz lane; physical Mission 0Q failures remain encoded as desired-behavior regressions rather than normalized as expected behavior.
 
-Prove on physical devices:
-- native build succeeds
-- notification -> request -> consent -> first rendered frame
-- rotation
-- PiP
-- weak-link degradation and bounded reconnect
-- Retry without force-stop
-- Stop -> immediate new session
-- useful media telemetry
+## Mission 0P — P0 runtime repair
 
-Capture evidence about actual NACK/RTX/FEC negotiation. Do not enable FEC merely because it is available.
+Run only after Mission 0R is reviewed.
+
+Implement the combined audit findings sequentially, proving each in the Runtime Laboratory before moving on:
+
+1. P0-A discovery / availability / control truth;
+2. P0-B sanitized pre-LIVE WebRTC observability;
+3. P0-C phase-correct media timing and bounded directional recovery;
+4. P0-D Android background trusted-listener lifecycle;
+5. P0-E notification/permission correctness;
+6. P0-F Viewer/PiP/keep-awake ownership;
+7. P0-G responsiveness/queue/diagnostics cleanup;
+8. P0-H verification repair.
+
+Do not build an APK after every section. Source/twin/native-test evidence is the normal loop.
+
+**Exit:** P0 desired-behavior regressions are green at the appropriate software/native levels and the repair PR is reviewed.
+
+## Mission 0Q2 — One frozen physical requalification
+
+Only after Mission 0R and Mission 0P are reviewed.
+
+Build one frozen APK and first prove repeatedly:
+
+`partner reachable → request → accept → MediaProjection consent → actual first rendered frame`
+
+Only after that basic path is stable expand to:
+
+- background incoming request;
+- rotation;
+- PiP;
+- weak-link degradation and bounded reconnect;
+- Retry without force-stop;
+- Stop → immediate new session;
+- truthful media telemetry.
 
 **Exit:** known-good WebRTC fallback baseline.
 
