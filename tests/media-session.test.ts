@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  MEDIA_INITIAL_USABLE_VIDEO_DEADLINE_MS,
+  MEDIA_CONNECTION_TIMEOUT_MS,
+  MEDIA_FIRST_FRAME_TIMEOUT_MS,
   MEDIA_RECONNECT_ATTEMPT_TIMEOUT_MS,
   MEDIA_RECONNECT_MAX_ATTEMPTS,
   MEDIA_STATS_POLL_INTERVAL_MS,
@@ -149,7 +150,7 @@ test('sharer is the only restart offer authority and returns to publishing when 
 });
 
 test('requester cannot turn a restart request into competing offer authority', async () => {
-  const h = harness(); await settle(); h.session.emit(msg('MEDIA_RESTART_REQUEST', { reason: 'connection_lost' })); await settle(); assert.equal(h.session.failed, 1); assert.equal(h.media.getSnapshot().type, 'error'); assert.equal(h.native.offers, 0); h.media.dispose();
+  const h = harness(); await settle(); h.session.emit(msg('MEDIA_RESTART_REQUEST', { reason: 'connection_lost' })); await settle(); assert.equal(h.session.failed, 0); assert.equal(h.media.getSnapshot().type, 'error'); assert.equal(h.native.offers, 0); h.media.dispose();
 });
 
 test('planned native close during reconnect does not become a phantom failure', async () => {
@@ -162,7 +163,7 @@ test('recovery is capped and fails closed after the configured attempts', async 
     if (h.scheduler.pending()) { h.scheduler.runNext(); await settle(); }
     if (attempt < MEDIA_RECONNECT_MAX_ATTEMPTS - 1) { h.native.emit({ type: 'connection_state', sessionId, state: 'failed' }); await settle(); }
   }
-  h.native.emit({ type: 'connection_state', sessionId, state: 'failed' }); await settle(); assert.equal(h.media.getSnapshot().type, 'error'); assert.equal(h.session.failed, 1); h.media.dispose();
+  h.native.emit({ type: 'connection_state', sessionId, state: 'failed' }); await settle(); assert.equal(h.media.getSnapshot().type, 'error'); assert.equal(h.session.failed, 0); h.media.dispose();
 });
 
 test('session teardown cancels recovery and closes media idempotently', async () => {
@@ -298,13 +299,26 @@ test('a stale first-frame callback from a replaced renderer epoch cannot make th
   h.media.dispose();
 });
 
-test('initial usable-video deadline fails closed when no first frame arrives', async () => {
+test('requester connected before MediaProjection consent has no usable-video deadline', async () => {
   const h = harness(); await settle();
   assert.equal(h.media.getSnapshot().type, 'negotiating');
-  assert.ok(h.scheduler.tasks.some((task) => !task.cancelled && task.delay === MEDIA_INITIAL_USABLE_VIDEO_DEADLINE_MS));
+  assert.equal(h.scheduler.tasks.some((task) => !task.cancelled && task.delay === MEDIA_FIRST_FRAME_TIMEOUT_MS), false);
+  assert.equal(h.scheduler.tasks.some((task) => !task.cancelled && task.delay === MEDIA_CONNECTION_TIMEOUT_MS), false);
+  assert.notEqual(h.media.getSnapshot().type, 'error');
+  h.media.dispose();
+});
+
+test('first-frame deadline starts only after remote_track and recovers media without destroying the pair', async () => {
+  const h = harness(); await settle();
+  h.session.emit(msg('SDP_OFFER', { sdp: safeSdp })); await settle();
+  assert.ok(h.scheduler.tasks.some((task) => !task.cancelled && task.delay === MEDIA_CONNECTION_TIMEOUT_MS));
+  h.native.emit({ type: 'remote_track', sessionId }); await settle();
+  assert.equal(h.media.getSnapshot().type, 'remote_track_attached');
+  assert.ok(h.scheduler.tasks.some((task) => !task.cancelled && task.delay === MEDIA_FIRST_FRAME_TIMEOUT_MS));
   h.scheduler.runNext(); await settle();
-  assert.equal(h.media.getSnapshot().type, 'error');
-  assert.equal(h.session.failed, 1);
+  assert.equal(h.media.getSnapshot().type, 'reconnecting');
+  assert.equal(h.session.failed, 0);
+  assert.equal(h.session.getSnapshot().type, 'Connected');
   h.media.dispose();
 });
 
