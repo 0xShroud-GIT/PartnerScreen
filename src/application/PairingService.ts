@@ -46,6 +46,7 @@ import {
   PairingTransportError,
   type PairingTransport,
 } from '../platform/pairing/ExpoPairingTransport';
+import { systemRuntimeScheduler, type RuntimeScheduler, type RuntimeTimer } from '../runtime/RuntimeScheduler';
 import type { PairingTransportEvent } from '../../modules/partner-pairing-transport';
 
 export interface PairingPeerIdentity {
@@ -77,7 +78,7 @@ interface AttemptContext {
   outboundSequence: number;
   replay: PairingReplayGuard;
   commit?: PairCommitPayload;
-  expiryTimer?: ReturnType<typeof setTimeout>;
+  expiryTimer?: RuntimeTimer;
   durableConvergenceReached: boolean;
 }
 
@@ -97,6 +98,7 @@ export class PairingService {
     private readonly transport: PairingTransport,
     private readonly crypto: PairingCrypto,
     private readonly now: () => Date = () => new Date(),
+    private readonly scheduler: RuntimeScheduler = systemRuntimeScheduler,
   ) {
     this.unsubscribeTransport = this.transport.subscribe((event) => this.onTransportEvent(event));
   }
@@ -674,7 +676,7 @@ export class PairingService {
     const attempt = this.attempt;
     if (!attempt) return;
     this.attempt = null;
-    if (attempt.expiryTimer) clearTimeout(attempt.expiryTimer);
+    attempt.expiryTimer?.cancel();
 
     const cleanupErrors: unknown[] = [];
     if (!options?.keepDurablePair) {
@@ -694,12 +696,12 @@ export class PairingService {
     const attempt = this.requireAttempt();
     const pairAttemptId = attempt.pairAttemptId;
     const delay = Math.max(1, expiresAtMs - this.now().getTime());
-    attempt.expiryTimer = setTimeout(() => {
+    attempt.expiryTimer = this.scheduler.schedule(delay, () => {
       void this.enqueueOperation(async () => {
         if (!this.attempt || this.attempt.pairAttemptId !== pairAttemptId) return;
         await this.failAttempt('The pairing attempt expired. Start again with a new QR code.', true);
       }).catch(() => undefined);
-    }, delay);
+    });
   }
 
   private async requireNamedLocalIdentity(): Promise<LocalDeviceIdentity> {
