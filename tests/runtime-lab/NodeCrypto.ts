@@ -13,9 +13,12 @@ import {
 } from '../../src/domain/pairing/PairingCryptoWire';
 import type { AesGcmPrimitive, HmacSha256Primitive } from '../../src/security/SignalingCipher';
 
-function uuidFromCounter(counter: number): string {
-  const tail = counter.toString(16).padStart(12, '0').slice(-12);
-  return `00000000-0000-4000-8000-${tail}`;
+function uuidFromBytes(input: Buffer): string {
+  const bytes = Buffer.from(input.subarray(0, 16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
 /** Deterministic identifiers/nonces make randomized Runtime Lab failures replayable by seed. */
@@ -25,13 +28,17 @@ export class LabIdSource {
   constructor(private readonly seed = 'partnerscreen-runtime-lab') {}
 
   uuid(): string {
-    return uuidFromCounter(this.counter++);
+    const digest = createHash('sha256').update(`${this.seed}:uuid:${this.counter++}`, 'utf8').digest();
+    return uuidFromBytes(digest);
   }
 
   bytes(length: number): Buffer {
     const chunks: Buffer[] = [];
-    while (Buffer.concat(chunks).length < length) {
-      chunks.push(createHash('sha256').update(`${this.seed}:${this.counter++}`, 'utf8').digest());
+    let total = 0;
+    while (total < length) {
+      const chunk = createHash('sha256').update(`${this.seed}:bytes:${this.counter++}`, 'utf8').digest();
+      chunks.push(chunk);
+      total += chunk.length;
     }
     return Buffer.concat(chunks).subarray(0, length);
   }
