@@ -482,8 +482,18 @@ class PartnerDiscoveryModule : Module() {
       return WifiEndpoint(network, address)
     }
 
-    val active = connectivity.activeNetwork ?: return null
-    return endpointFor(active)
+    val active = connectivity.activeNetwork
+    if (active != null) endpointFor(active)?.let { return it }
+
+    // Compatibility fallback: Android can keep cellular as the default network while a usable
+    // private Wi-Fi network remains connected. Discovery must follow the same private-Wi-Fi
+    // selection behavior as pairing and control so availability does not fail spuriously.
+    @Suppress("DEPRECATION")
+    return connectivity.allNetworks
+      .asSequence()
+      .filter { it != active }
+      .mapNotNull { endpointFor(it) }
+      .firstOrNull()
   }
 
   private fun hasRouteTo(links: LinkProperties, destination: Inet4Address): Boolean =

@@ -1,6 +1,6 @@
 import type { DiagnosticsRepository } from '../domain/diagnostics/DiagnosticsRepository';
-import type { LocalDeviceIdentity } from '../domain/identity/LocalDeviceIdentity';
-import type { IdentityRepository } from '../domain/identity/IdentityRepository';
+import { IdentityPersistenceError, type IdentityRepository } from '../domain/identity/IdentityRepository';
+import { InvalidDeviceNameError, type LocalDeviceIdentity } from '../domain/identity/LocalDeviceIdentity';
 
 export class LocalIdentityService {
   constructor(
@@ -14,7 +14,7 @@ export class LocalIdentityService {
       await this.safeRecord(result.created ? 'identity_created' : 'identity_loaded');
       return result.identity;
     } catch (error) {
-      await this.safeRecord('identity_storage_error');
+      if (error instanceof IdentityPersistenceError) await this.safeRecord('identity_storage_error');
       throw error;
     }
   }
@@ -25,7 +25,8 @@ export class LocalIdentityService {
       await this.safeRecord('device_name_updated');
       return identity;
     } catch (error) {
-      await this.safeRecord('identity_storage_error');
+      if (error instanceof InvalidDeviceNameError) await this.safeRecord('identity_validation_rejected');
+      else if (error instanceof IdentityPersistenceError) await this.safeRecord('identity_storage_error');
       throw error;
     }
   }

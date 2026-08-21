@@ -51,8 +51,8 @@ const availableIndex = availability.indexOf("kind: 'available'", probeIndex);
 if (!(hintIndex >= 0 && proofIndex > hintIndex && probeIndex > proofIndex && availableIndex > probeIndex)) throw new Error('Available must follow hint verification, proof verification and reachability probe.');
 
 const kotlin = read('modules/partner-discovery/android/src/main/java/com/partnerscreen/discovery/PartnerDiscoveryModule.kt');
-for (const marker of ['NsdManager', '_partnerscreen._tcp.', 'callbackExecutor', 'MulticastLock', 'activeWifiEndpoint', 'val active = connectivity.activeNetwork ?: return null', 'wifi.network.bindSocket(socket)', 'socket.connect(InetSocketAddress(address, port), PROBE_TIMEOUT_MS)', '@Volatile private var registeredServiceName', 'val acceptedRegistration = synchronized(stateLock)']) requireMarker(kotlin, marker, 'PartnerDiscoveryModule.kt');
-for (const marker of ['CountDownLatch', 'Thread.sleep', 'connectivity.allNetworks', 'NetworkInterface', 'Log.', 'println(']) forbidMarker(kotlin, marker, 'PartnerDiscoveryModule.kt');
+for (const marker of ['NsdManager', '_partnerscreen._tcp.', 'callbackExecutor', 'MulticastLock', 'activeWifiEndpoint', 'val active = connectivity.activeNetwork', 'endpointFor(active)?.let { return it }', 'connectivity.allNetworks', 'mapNotNull { endpointFor(it) }', 'wifi.network.bindSocket(socket)', 'socket.connect(InetSocketAddress(address, port), PROBE_TIMEOUT_MS)', '@Volatile private var registeredServiceName', 'val acceptedRegistration = synchronized(stateLock)']) requireMarker(kotlin, marker, 'PartnerDiscoveryModule.kt');
+for (const marker of ['CountDownLatch', 'Thread.sleep', 'NetworkInterface', 'Log.', 'println(']) forbidMarker(kotlin, marker, 'PartnerDiscoveryModule.kt');
 if (kotlin.indexOf('wifi.network.bindSocket(socket)') > kotlin.indexOf('socket.connect(InetSocketAddress(address, port), PROBE_TIMEOUT_MS)')) throw new Error('Probe socket must bind to Wi-Fi before connect.');
 
 const ui = read('app/index.tsx');

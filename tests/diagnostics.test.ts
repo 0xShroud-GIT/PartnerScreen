@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import type { KeyValueStore } from '../src/domain/persistence/KeyValueStore';
 import { MAX_DIAGNOSTIC_EVENTS } from '../src/domain/diagnostics/DiagnosticEvent';
 import { DIAGNOSTICS_STORAGE_KEY, DiagnosticsRepository } from '../src/domain/diagnostics/DiagnosticsRepository';
@@ -56,4 +57,10 @@ test('diagnostic report omits full device ID and user-selected device name', () 
   assert.equal(report.includes(identity.deviceName ?? ''), false);
   assert.equal(report.includes('deviceIdSuffix=11111111'), true);
   assert.equal(report.includes('deviceNameConfigured=true'), true);
+});
+
+test('diagnostic report text does not enable Android native selection drag', () => {
+  const source = readFileSync('app/diagnostics.tsx', 'utf8');
+  assert.equal(source.includes('<Text selectable style={styles.report}>'), false);
+  assert.equal(source.includes('<Text style={styles.report}>{report}</Text>'), true);
 });

@@ -1,7 +1,8 @@
 import {
-  CONTROL_PROTOCOL_VERSION, MAC_HEX_RE, MAX_MEDIA_CANDIDATE_CHARS, MAX_MEDIA_SDP_CHARS, NONCE_HEX_RE, UUID_V4_RE,
+  CONTROL_PROTOCOL_VERSION, MAC_HEX_RE, NONCE_HEX_RE, UUID_V4_RE,
   isControlMessageType, type AnyControlMessage, type ControlHandshakeFrame, type ControlMessageType, type Hello1Frame, type Hello2Frame, type SealedControlFrame,
 } from './ControlMessage';
+import { isSafePrivateHostCandidate, isSafeVideoSdp } from './MediaValidation';
 
 const MAX_CONTROL_FRAME_BYTES = 48 * 1024;
 const MAX_SEALED_WIRE_CHARS = 40 * 1024;
@@ -16,13 +17,6 @@ function requireSequence(value: unknown): number { if (!Number.isSafeInteger(val
 function requireNonce(value: unknown): string { if (typeof value !== 'string' || !NONCE_HEX_RE.test(value)) throw new ControlCodecError('Control nonce is invalid.'); return value.toLowerCase(); }
 function requireMac(value: unknown): string { if (typeof value !== 'string' || !MAC_HEX_RE.test(value)) throw new ControlCodecError('Control authentication tag is invalid.'); return value.toLowerCase(); }
 function requireVersion(value: unknown): typeof CONTROL_PROTOCOL_VERSION { if (value !== CONTROL_PROTOCOL_VERSION) throw new ControlCodecError('Unsupported control protocol version.'); return CONTROL_PROTOCOL_VERSION; }
-function safeVideoSdp(value: unknown): value is string { return typeof value === 'string' && value.length > 0 && value.length <= MAX_MEDIA_SDP_CHARS && value.includes('m=video') && !value.includes('m=audio') && !/\b(?:turn|turns|stun):/i.test(value); }
-function safeCandidate(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length < 10 || value.length > MAX_MEDIA_CANDIDATE_CHARS || /\r|\n/.test(value)) return false;
-  const parts = value.trim().split(/\s+/); if (parts.length < 8 || parts[6] !== 'typ' || parts[7] !== 'host') return false;
-  const octets = (parts[4] ?? '').split('.').map(Number); if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-  return octets[0] === 10 || (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) || (octets[0] === 192 && octets[1] === 168);
-}
 function parsePayload(type: ControlMessageType, value: unknown): AnyControlMessage['payload'] {
   const payload = objectValue(value, 'Control payload');
   if (type === 'REQUEST_SCREEN') { if (!exactKeys(payload, ['expiresAt']) || typeof payload.expiresAt !== 'string') throw new ControlCodecError('REQUEST_SCREEN payload is invalid.'); requireTimestamp(payload.expiresAt); return { expiresAt: payload.expiresAt }; }
@@ -30,8 +24,8 @@ function parsePayload(type: ControlMessageType, value: unknown): AnyControlMessa
   if (type === 'ACCEPT_SCREEN') { if (!exactKeys(payload, [])) throw new ControlCodecError('ACCEPT_SCREEN payload is invalid.'); return {}; }
   if (type === 'DECLINE_SCREEN') { if (!exactKeys(payload, ['reason']) || (payload.reason !== 'declined' && payload.reason !== 'busy')) throw new ControlCodecError('DECLINE_SCREEN payload is invalid.'); return { reason: payload.reason }; }
   if (type === 'CAPTURE_DENIED') { if (!exactKeys(payload, ['reason']) || (payload.reason !== 'system_denied' && payload.reason !== 'notifications_denied')) throw new ControlCodecError('CAPTURE_DENIED payload is invalid.'); return { reason: payload.reason }; }
-  if (type === 'SDP_OFFER' || type === 'SDP_ANSWER') { if (!exactKeys(payload, ['sdp']) || !safeVideoSdp(payload.sdp)) throw new ControlCodecError(`${type} payload is invalid.`); return { sdp: payload.sdp }; }
-  if (type === 'ICE_CANDIDATE') { if (!exactKeys(payload, ['sdpMid', 'sdpMLineIndex', 'candidate']) || typeof payload.sdpMid !== 'string' || payload.sdpMid.length > 64 || !Number.isInteger(payload.sdpMLineIndex) || (payload.sdpMLineIndex as number) < 0 || (payload.sdpMLineIndex as number) > 32 || !safeCandidate(payload.candidate)) throw new ControlCodecError('ICE_CANDIDATE payload is invalid.'); return { sdpMid: payload.sdpMid, sdpMLineIndex: payload.sdpMLineIndex as number, candidate: payload.candidate }; }
+  if (type === 'SDP_OFFER' || type === 'SDP_ANSWER') { if (!exactKeys(payload, ['sdp']) || !isSafeVideoSdp(payload.sdp)) throw new ControlCodecError(`${type} payload is invalid.`); return { sdp: payload.sdp }; }
+  if (type === 'ICE_CANDIDATE') { if (!exactKeys(payload, ['sdpMid', 'sdpMLineIndex', 'candidate']) || typeof payload.sdpMid !== 'string' || payload.sdpMid.length > 64 || !Number.isInteger(payload.sdpMLineIndex) || (payload.sdpMLineIndex as number) < 0 || (payload.sdpMLineIndex as number) > 32 || !isSafePrivateHostCandidate(payload.candidate)) throw new ControlCodecError('ICE_CANDIDATE payload is invalid.'); return { sdpMid: payload.sdpMid, sdpMLineIndex: payload.sdpMLineIndex as number, candidate: payload.candidate }; }
   if (type === 'MEDIA_RESTART_REQUEST') { if (!exactKeys(payload, ['reason']) || payload.reason !== 'connection_lost') throw new ControlCodecError('MEDIA_RESTART_REQUEST payload is invalid.'); return { reason: 'connection_lost' }; }
   if (type === 'SESSION_END') { if (!exactKeys(payload, ['reason']) || !['user', 'disconnect', 'timeout'].includes(String(payload.reason))) throw new ControlCodecError('SESSION_END payload is invalid.'); return { reason: payload.reason as 'user' | 'disconnect' | 'timeout' }; }
   if (!exactKeys(payload, ['reason']) || !['busy', 'invalid_transition', 'timeout', 'auth_failed', 'capture_failed', 'capture_revoked', 'media_failed'].includes(String(payload.reason))) throw new ControlCodecError('SESSION_ERROR payload is invalid.');
