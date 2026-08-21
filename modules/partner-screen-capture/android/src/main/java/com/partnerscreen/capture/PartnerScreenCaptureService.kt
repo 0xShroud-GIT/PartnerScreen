@@ -40,6 +40,7 @@ class PartnerScreenCaptureService : Service() {
   private var captureStarting = false
   private var captureStarted = false
   private var captureSessionId: String? = null
+  private var pendingStart: Intent? = null
 
   override fun onCreate() {
     super.onCreate()
@@ -148,6 +149,15 @@ class PartnerScreenCaptureService : Service() {
       mainHandler.post {
         if (emitRevoked && sessionId != null) CaptureBridge.emit("revoked", sessionId)
         else if (emitStopped && sessionId != null) CaptureBridge.emit("stopped", sessionId, reason = normalizeStopReason(reason))
+        val queued = pendingStart
+        pendingStart = null
+        if (queued != null) {
+          stopping = false
+          captureStarting = false
+          captureStarted = false
+          startProjection(queued)
+          return@post
+        }
         try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
         stopSelf()
       }

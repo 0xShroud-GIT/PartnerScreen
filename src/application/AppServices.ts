@@ -29,6 +29,7 @@ import { ExpoRequestNotification } from '../platform/notifications/ExpoRequestNo
 import { ExpoLifecycle } from '../platform/lifecycle/ExpoLifecycle';
 import { ExpoKeepAwake } from '../platform/keepawake/ExpoKeepAwake';
 import { ExpoPip } from '../platform/pip/ExpoPip';
+import { recoverProductError } from '../session/ErrorRecovery';
 
 const clock: Clock = { nowIso: () => new Date().toISOString() };
 const ordinaryStore = new AsyncStorageKeyValueStore();
@@ -88,8 +89,19 @@ pairingService.subscribe(() => {
 });
 void pairingService.initialize().catch(() => undefined);
 
+export async function recoverFromError(): Promise<void> {
+  await recoverProductError({
+    session: sessionController,
+    media: mediaSessionController,
+    capture: screenCaptureCoordinator,
+    notifications: requestNotificationPort,
+    pip: pipPort,
+    keepAwake: keepAwakePort,
+  });
+}
+
 export const appServices = {
   clock, diagnosticsRepository, identityRepository, localIdentityService, pairTrustRepository, pairingService,
   availabilityService, controlSession, sessionController, screenCaptureCoordinator, mediaSessionController,
-  incomingRequestNotifier, requestNotificationPort, lifecyclePort, keepAwakePort, pipPort,
+  incomingRequestNotifier, requestNotificationPort, lifecyclePort, keepAwakePort, pipPort, recoverFromError,
 };

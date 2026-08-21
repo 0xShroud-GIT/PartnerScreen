@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  MEDIA_INITIAL_USABLE_VIDEO_DEADLINE_MS,
+  MEDIA_RECONNECT_ATTEMPT_TIMEOUT_MS,
   MEDIA_RECONNECT_MAX_ATTEMPTS,
+  MEDIA_STATS_POLL_INTERVAL_MS,
   MediaSessionController,
   type CaptureStateSource,
   type MediaRecoveryScheduler,
   type MediaSessionAuthority,
   type RecoveryTimer,
 } from '../src/media/MediaSessionController';
+import type { SanitizedMediaStats } from '../src/media/MediaStats';
 import type { WebRtcMediaNativeEvent, WebRtcMediaPort } from '../src/media/WebRtcMediaPort';
 import type { AnyMediaControlMessage, ControlPayloadMap, MediaControlMessageType } from '../src/protocol/ControlMessage';
 import type { ScreenCaptureState } from '../src/capture/ScreenCaptureCoordinator';
@@ -47,6 +51,8 @@ class FakeNative implements WebRtcMediaPort {
   async acceptAnswer(): Promise<void> { this.acceptedAnswers += 1; }
   async addIceCandidate(): Promise<void> { this.candidates += 1; }
   async close(id: string): Promise<void> { this.closed.push(id); }
+  stats: SanitizedMediaStats | null = null;
+  async getStats(): Promise<SanitizedMediaStats | null> { return this.stats; }
   emit(event: WebRtcMediaNativeEvent): void { for (const listener of this.listeners) listener(event); }
 }
 class FakeSession implements MediaSessionAuthority {
@@ -81,7 +87,7 @@ class FakeScheduler implements MediaRecoveryScheduler {
 }
 async function settle(): Promise<void> { for (let i = 0; i < 6; i += 1) await new Promise<void>((resolve) => setImmediate(resolve)); }
 function msg<T extends MediaControlMessageType>(type: T, payload: ControlPayloadMap[T]): AnyMediaControlMessage { return { version: 1, messageId: '55555555-5555-4555-8555-555555555555', type, sessionId, senderDeviceId: partnerId, sequence: 1, timestamp: '2026-08-19T00:00:00.000Z', payload } as AnyMediaControlMessage; }
-function harness() { const native = new FakeNative(), session = new FakeSession(), capture = new FakeCapture(), diagnostics = new Diagnostics(), scheduler = new FakeScheduler(); const media = new MediaSessionController(native, session, capture, diagnostics, scheduler); return { native, session, capture, diagnostics, scheduler, media }; }
+function harness(nowMs?: () => number) { const native = new FakeNative(), session = new FakeSession(), capture = new FakeCapture(), diagnostics = new Diagnostics(), scheduler = new FakeScheduler(); const media = new MediaSessionController(native, session, capture, diagnostics, scheduler, nowMs); return { native, session, capture, diagnostics, scheduler, media }; }
 
 async function makeLive(h: ReturnType<typeof harness>): Promise<void> {
   await settle(); h.native.emit({ type: 'remote_track', sessionId }); await settle();
@@ -289,5 +295,54 @@ test('a stale first-frame callback from a replaced renderer epoch cannot make th
   assert.notEqual(h.media.getSnapshot().type, 'live');
   await h.media.rendererFirstFrame(sessionId, epochB); await settle(); // renderer B first frame
   assert.equal(h.media.getSnapshot().type, 'live');
+  h.media.dispose();
+});
+
+test('initial usable-video deadline fails closed when no first frame arrives', async () => {
+  const h = harness(); await settle();
+  assert.equal(h.media.getSnapshot().type, 'negotiating');
+  assert.ok(h.scheduler.tasks.some((task) => !task.cancelled && task.delay === MEDIA_INITIAL_USABLE_VIDEO_DEADLINE_MS));
+  h.scheduler.runNext(); await settle();
+  assert.equal(h.media.getSnapshot().type, 'error');
+  assert.equal(h.session.failed, 1);
+  h.media.dispose();
+});
+
+test('sharer reconnect attempt has an unconditional timeout when ICE never connects', async () => {
+  const h = harness();
+  h.session.setState({ type: 'Connected', pair, sessionId, role: 'sharer' });
+  h.capture.setState({ type: 'capturing', sessionId }); await settle();
+  h.session.emit(msg('MEDIA_RESTART_REQUEST', { reason: 'connection_lost' })); await settle();
+  h.scheduler.runNext(); await settle();
+  assert.equal(h.media.getSnapshot().type, 'reconnecting');
+  assert.ok(h.scheduler.tasks.some((task) => !task.cancelled && task.delay === MEDIA_RECONNECT_ATTEMPT_TIMEOUT_MS));
+  h.scheduler.runNext(); await settle();
+  const state = h.media.getSnapshot();
+  assert.equal(state.type, 'reconnecting');
+  if (state.type === 'reconnecting') assert.equal(state.attempt, 2);
+  h.media.dispose();
+});
+
+test('production media stats are sanitized, measured, and can mark publishing degraded', async () => {
+  let now = 1_000;
+  const h = harness(() => now);
+  h.session.setState({ type: 'Connected', pair, sessionId, role: 'sharer' });
+  h.capture.setState({ type: 'capturing', sessionId }); await settle();
+  h.native.emit({ type: 'connection_state', sessionId, state: 'connected' }); await settle();
+  assert.equal(h.media.getSnapshot().type, 'publishing');
+  h.native.stats = { bytesSent: 10_000, packetsLost: 0, framesPerSecond: 20, bitrateParametersApplied: true };
+  assert.ok(h.scheduler.tasks.some((task) => !task.cancelled && task.delay === MEDIA_STATS_POLL_INTERVAL_MS));
+  h.scheduler.runNext(); await settle();
+  assert.equal(h.media.getStatsSnapshot()?.bytesSent, 10_000);
+  assert.equal((h.media.getStatsSnapshot() as { sdp?: unknown } | null)?.sdp, undefined);
+  now = 2_500;
+  h.native.stats = { bytesSent: 80_000, packetsLost: 24, roundTripTime: 0.45, bitrateParametersApplied: false };
+  h.scheduler.runNext(); await settle();
+  const publishing = h.media.getSnapshot();
+  assert.equal(publishing.type, 'publishing');
+  if (publishing.type === 'publishing') assert.equal(publishing.quality, 'degraded');
+  assert.ok((h.media.getStatsSnapshot()?.measuredBitrateBps ?? 0) > 0);
+  assert.equal(h.media.getStatsSnapshot()?.bitrateParametersApplied, false);
+  assert.ok(h.diagnostics.events.includes('media_stats'));
   h.media.dispose();
 });

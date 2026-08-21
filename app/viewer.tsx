@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -6,6 +6,7 @@ import { PartnerRemoteVideoView } from '../modules/partner-screen-capture';
 import { useMediaSession } from '../src/presentation/useMediaSession';
 import { useSession } from '../src/presentation/useSession';
 import { appServices } from '../src/application/AppServices';
+import { displayedVideoSize, type VideoGeometry } from '../src/platform/pip/videoGeometry';
 
 export default function ViewerScreen() {
   const session = useSession();
@@ -24,7 +25,8 @@ export default function ViewerScreen() {
   const rendererEpoch = rendererTrackState?.trackEpoch ?? 0;
 
   const [isPip, setIsPip] = useState(false);
-  const videoSizeRef = useRef({ width: 1280, height: 720 });
+  const [videoGeometry, setVideoGeometry] = useState<VideoGeometry | null>(null);
+  const videoSize = videoGeometry ? displayedVideoSize(videoGeometry) : null;
 
   const returnHome = useCallback(() => {
     router.replace('/');
@@ -36,13 +38,15 @@ export default function ViewerScreen() {
   }, [session, returnHome]);
 
   const enterPip = useCallback(async () => {
-    if (!appServices.pipPort.supportsPip()) return;
-    const { width, height } = videoSizeRef.current;
-    await appServices.pipPort.enterPip(width, height).catch(() => false);
-  }, []);
+    if (!appServices.pipPort.supportsPip() || !videoSize) return;
+    await appServices.pipPort.enterPip(videoSize.width, videoSize.height).catch(() => false);
+  }, [videoSize]);
 
   useEffect(() => {
-    if (!requesterSessionId) returnHome();
+    if (!requesterSessionId) {
+      void appServices.pipPort.exitPip().catch(() => false);
+      returnHome();
+    }
   }, [requesterSessionId, returnHome]);
 
   useEffect(() => {
@@ -58,12 +62,12 @@ export default function ViewerScreen() {
   useEffect(() => {
     if (!requesterSessionId) return;
     void appServices.diagnosticsRepository.append('viewer_opened').catch(() => undefined);
-    void appServices.keepAwakePort.enable().then(() => {
-      void appServices.diagnosticsRepository.append('keep_awake_enabled').catch(() => undefined);
+    void appServices.keepAwakePort.enable().then((enabled) => {
+      if (enabled) void appServices.diagnosticsRepository.append('keep_awake_enabled').catch(() => undefined);
     });
     return () => {
-      void appServices.keepAwakePort.disable().then(() => {
-        void appServices.diagnosticsRepository.append('keep_awake_disabled').catch(() => undefined);
+      void appServices.keepAwakePort.disable().then((disabled) => {
+        if (disabled) void appServices.diagnosticsRepository.append('keep_awake_disabled').catch(() => undefined);
       });
       void appServices.diagnosticsRepository.append('viewer_closed').catch(() => undefined);
     };
@@ -80,14 +84,10 @@ export default function ViewerScreen() {
   // Explicit PiP entry via button is preferred for reliability; auto-enter on background is omitted for first release.
   // Viewer remains awake via keep-awake while foreground; background handling is via system PiP if user tapped.
 
-  // If session ends/fails while in PiP, ensure we exit PiP or show terminal: viewer will unmount via returnHome,
-  // which on Android will automatically leave PiP when the activity is finished.
   useEffect(() => {
-    if (!requesterSessionId && isPip) {
-      // Session ended while in PiP: diagnostics already have viewer_closed via above; ensure PiP exits.
-      // No explicit native exit needed; returning home will handle.
-    }
-  }, [requesterSessionId, isPip]);
+    if (!isPip || !videoSize) return;
+    void appServices.pipPort.updatePipAspect(videoSize.width, videoSize.height).catch(() => false);
+  }, [isPip, videoSize]);
 
   if (!requesterSessionId) {
     return (
@@ -110,7 +110,7 @@ export default function ViewerScreen() {
             ? media.state.message
             : 'Connecting…';
 
-  const canEnterPip = appServices.pipPort.supportsPip() && rendererReady && !!requesterSessionId;
+  const canEnterPip = appServices.pipPort.supportsPip() && rendererReady && !!requesterSessionId && videoSize !== null;
 
   return (
     <View accessibilityLabel="Trusted partner screen viewer" style={styles.root}>

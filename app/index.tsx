@@ -38,7 +38,7 @@ export default function HomeScreen() {
   if (pairing.state.kind === 'creator_qr') resumeRoute = '/pair/create';
   else if (pairing.state.kind === 'waiting_partner' || pairing.state.kind === 'confirm_partner' || pairing.state.kind === 'finalizing') resumeRoute = pairing.state.role === 'creator' ? '/pair/create' : '/pair/scan';
 
-  const product = deriveProductPresentation({ session: session.state, capture: capture.state, media: media.state });
+  const product = deriveProductPresentation({ session: session.state, capture: capture.state, media: media.state, mediaHealth: media.health, mediaStats: media.stats });
   const productToneStyle = product.tone === 'positive' ? styles.statusPositive : product.tone === 'attention' ? styles.statusAttention : product.tone === 'danger' ? styles.statusDanger : styles.statusNeutral;
 
   const forgetPartner = () => Alert.alert('Forget trusted partner?', 'This ends any active request, capture and private video session, then removes saved trust.', [

@@ -1,3 +1,5 @@
+import type { SanitizedMediaStats } from './MediaStats';
+
 export type MediaConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed';
 export type WebRtcMediaNativeEvent =
   | { type: 'ice_candidate'; sessionId: string; sdpMid: string; sdpMLineIndex: number; candidate: string }
@@ -12,4 +14,5 @@ export interface WebRtcMediaPort {
   acceptAnswer(sessionId: string, sdp: string): Promise<void>;
   addIceCandidate(sessionId: string, sdpMid: string, sdpMLineIndex: number, candidate: string): Promise<void>;
   close(sessionId: string): Promise<void>;
+  getStats(sessionId: string): Promise<SanitizedMediaStats | null>;
 }

@@ -1,7 +1,14 @@
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
-import { Stack } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import { appServices } from '../src/application/AppServices';
+import { shouldOpenIncomingRequest } from '../src/request/incomingRequestRoute';
+
+function routeIncomingRequest(sessionId: string): void {
+  if (shouldOpenIncomingRequest(appServices.sessionController.getSnapshot(), sessionId)) {
+    router.replace('/');
+  }
+}
 
 export default function RootLayout() {
   useEffect(() => {
@@ -11,7 +18,16 @@ export default function RootLayout() {
       if (state === 'active') void appServices.diagnosticsRepository.append('app_foregrounded').catch(() => undefined);
       if (state === 'background') void appServices.diagnosticsRepository.append('app_backgrounded').catch(() => undefined);
     });
-    return () => sub.remove();
+    void appServices.requestNotificationPort.consumeLaunchSessionId().then((sessionId) => {
+      if (sessionId) routeIncomingRequest(sessionId);
+    }).catch(() => undefined);
+    const unsubOpened = appServices.requestNotificationPort.subscribeOpened((sessionId) => {
+      routeIncomingRequest(sessionId);
+    });
+    return () => {
+      sub.remove();
+      unsubOpened();
+    };
   }, []);
 
   return (

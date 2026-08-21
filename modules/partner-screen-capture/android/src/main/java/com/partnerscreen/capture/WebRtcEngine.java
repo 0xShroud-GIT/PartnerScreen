@@ -86,6 +86,7 @@ public final class WebRtcEngine {
   private VideoSink rendererSink;
   private String rendererSessionId;
   private volatile EventListener eventListener;
+  private boolean bitrateParametersApplied = false;
 
   private WebRtcEngine() {}
 
@@ -297,6 +298,7 @@ public final class WebRtcEngine {
       pendingRemoteCandidates.clear();
       remoteVideoTrack = null;
       localVideoSender = null;
+      bitrateParametersApplied = false;
       closingPeer = peerConnection;
       peerConnection = null;
       mediaSessionId = null;
@@ -367,8 +369,11 @@ public final class WebRtcEngine {
     return true;
   }
 
-  private static void configureScreenShareSender(RtpSender sender) {
-    if (sender == null) return;
+  private boolean configureScreenShareSender(RtpSender sender) {
+    if (sender == null) {
+      bitrateParametersApplied = false;
+      return false;
+    }
     try {
       RtpParameters parameters = sender.getParameters();
       // LAN screen-share profile: prioritize low latency over max resolution. BALANCED lets WebRTC drop
@@ -381,51 +386,64 @@ public final class WebRtcEngine {
         encoding.maxBitrateBps = SCREEN_SHARE_MAX_BITRATE_BPS;
         encoding.scaleResolutionDownBy = 1.0;
       }
-      sender.setParameters(parameters);
-    } catch (RuntimeException ignored) {}
+      // org.webrtc RtpSender.setParameters returns boolean. Swallowing the result previously claimed
+      // a bitrate cap that was never applied.
+      boolean applied = sender.setParameters(parameters);
+      bitrateParametersApplied = applied;
+      return applied;
+    } catch (RuntimeException ignored) {
+      bitrateParametersApplied = false;
+      return false;
+    }
   }
 
   public void getStats(String sessionId, StatsCallback callback) {
     final PeerConnection pc;
+    final boolean parametersApplied;
     synchronized (lock) {
       if (peerConnection == null || mediaSessionId == null || !mediaSessionId.equals(sessionId)) {
         callback.onStats(null);
         return;
       }
       pc = peerConnection;
+      parametersApplied = bitrateParametersApplied;
     }
     try {
+      // Jitsi WebRTC 124 / org.webrtc: the current stats API is getStats(RTCStatsCollectorCallback).
+      // The two-arg getStats(StatsObserver, MediaStreamTrack) is the legacy collector.
       pc.getStats(new org.webrtc.RTCStatsCollectorCallback() {
         @Override public void onStatsDelivered(org.webrtc.RTCStatsReport report) {
           try {
             Map<String, Object> sanitized = new HashMap<>();
-            sanitized.put("type", "media_stats");
-            sanitized.put("sessionId", sessionId);
+            sanitized.put("bitrateParametersApplied", parametersApplied);
             // Emit only sanitized numeric metrics, never full IP/SDP/candidate bodies.
             for (org.webrtc.RTCStats stat : report.getStatsMap().values()) {
-              if ("outbound-rtp".equals(stat.getType()) && "video".equals(stat.getMembers().get("kind"))) {
-                Object bytesSent = stat.getMembers().get("bytesSent");
-                Object packetsLost = stat.getMembers().get("packetsLost");
-                Object framesEncoded = stat.getMembers().get("framesEncoded");
-                Object framesPerSecond = stat.getMembers().get("framesPerSecond");
-                Object totalEncodeTime = stat.getMembers().get("totalEncodeTime");
-                if (bytesSent instanceof Number) sanitized.put("bytesSent", ((Number) bytesSent).longValue());
-                if (packetsLost instanceof Number) sanitized.put("packetsLost", ((Number) packetsLost).longValue());
-                if (framesEncoded instanceof Number) sanitized.put("framesEncoded", ((Number) framesEncoded).longValue());
-                if (framesPerSecond instanceof Number) sanitized.put("framesPerSecond", ((Number) framesPerSecond).doubleValue());
-                if (totalEncodeTime instanceof Number) sanitized.put("totalEncodeTime", ((Number) totalEncodeTime).doubleValue());
+              Map<String, Object> members = stat.getMembers();
+              String type = stat.getType();
+              if ("outbound-rtp".equals(type) && "video".equals(members.get("kind"))) {
+                putNumber(sanitized, "bytesSent", members.get("bytesSent"));
+                putNumber(sanitized, "packetsLost", members.get("packetsLost"));
+                putNumber(sanitized, "framesEncoded", members.get("framesEncoded"));
+                putNumber(sanitized, "framesPerSecond", members.get("framesPerSecond"));
+                putNumber(sanitized, "frameWidth", members.get("frameWidth"));
+                putNumber(sanitized, "frameHeight", members.get("frameHeight"));
               }
-              if ("remote-inbound-rtp".equals(stat.getType())) {
-                Object jitter = stat.getMembers().get("jitter");
-                Object roundTripTime = stat.getMembers().get("roundTripTime");
-                if (jitter instanceof Number) sanitized.put("jitter", ((Number) jitter).doubleValue());
-                if (roundTripTime instanceof Number) sanitized.put("roundTripTime", ((Number) roundTripTime).doubleValue());
+              if ("inbound-rtp".equals(type) && "video".equals(members.get("kind"))) {
+                putNumber(sanitized, "bytesReceived", members.get("bytesReceived"));
+                putNumber(sanitized, "packetsLost", members.get("packetsLost"));
+                putNumber(sanitized, "framesDecoded", members.get("framesDecoded"));
+                putNumber(sanitized, "framesPerSecond", members.get("framesPerSecond"));
+                putNumber(sanitized, "frameWidth", members.get("frameWidth"));
+                putNumber(sanitized, "frameHeight", members.get("frameHeight"));
               }
-              if ("candidate-pair".equals(stat.getType())) {
-                Object state = stat.getMembers().get("state");
-                Object nominated = stat.getMembers().get("nominated");
+              if ("remote-inbound-rtp".equals(type)) {
+                putNumber(sanitized, "jitter", members.get("jitter"));
+                putNumber(sanitized, "roundTripTime", members.get("roundTripTime"));
+              }
+              if ("candidate-pair".equals(type)) {
+                Object state = members.get("state");
+                Object nominated = members.get("nominated");
                 if ("succeeded".equals(state) && Boolean.TRUE.equals(nominated)) {
-                  // Only expose sanitized pair type, not IPs.
                   sanitized.put("candidatePairState", "succeeded");
                 }
               }
@@ -435,10 +453,14 @@ public final class WebRtcEngine {
             callback.onStats(null);
           }
         }
-      }, null);
+      });
     } catch (Exception ignored) {
       callback.onStats(null);
     }
+  }
+
+  private static void putNumber(Map<String, Object> target, String key, Object value) {
+    if (value instanceof Number) target.put(key, value);
   }
 
   public interface StatsCallback { void onStats(Map<String, Object> stats); }

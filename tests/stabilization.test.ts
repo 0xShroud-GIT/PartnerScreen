@@ -166,6 +166,7 @@ test('incoming request notification is shown and cleared on state transitions', 
   const fakeNotifications = {
     async showRequestNotification(sessionId: string, partnerName: string): Promise<boolean> { shown.push({ sessionId, partnerName }); return true; },
     async clearRequestNotification(): Promise<boolean> { cleared += 1; return true; },
+    async ensurePermission(): Promise<boolean> { return true; },
   };
   const fakeSessionState: { value: SessionState } = { value: { type: 'PairedOffline', pair } };
   const listeners = new Set<() => void>();
@@ -213,6 +214,7 @@ test('notification cleared on timeout/decline and not shown for non-incoming sta
   const fakeNotifications = {
     async showRequestNotification(sessionId: string): Promise<boolean> { shown.push(sessionId); return true; },
     async clearRequestNotification(): Promise<boolean> { clearedLog.push(1); return true; },
+    async ensurePermission(): Promise<boolean> { return true; },
   };
   const fakeSessionState: { value: SessionState } = { value: { type: 'PairedAvailable', pair, endpoint: { host: '192.168.1.11', port: 45001 } } };
   const listeners = new Set<() => void>();
@@ -293,6 +295,7 @@ class FakeNative implements WebRtcMediaPort {
   async acceptAnswer(): Promise<void> {}
   async addIceCandidate(): Promise<void> {}
   async close(id: string): Promise<void> { this.closed.push(id); }
+  async getStats(): Promise<null> { return null; }
   emit(event: WebRtcMediaNativeEvent): void { for (const l of this.listeners) l(event); }
 }
 class FakeSessionAuthority implements MediaSessionAuthority {

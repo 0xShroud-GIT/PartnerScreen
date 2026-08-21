@@ -10,6 +10,7 @@ import org.webrtc.SurfaceViewRenderer
 
 class PartnerRemoteVideoView(context: Context, appContext: AppContext) : ExpoView(context, appContext), RendererCommon.RendererEvents {
   private val onFirstFrame by EventDispatcher()
+  private val onFrameResolution by EventDispatcher()
   private val renderer = SurfaceViewRenderer(context)
   private var boundSessionId: String? = null
   private var firstFrameSent = false
@@ -57,8 +58,15 @@ class PartnerRemoteVideoView(context: Context, appContext: AppContext) : ExpoVie
   }
 
   override fun onFrameResolutionChanged(videoWidth: Int, videoHeight: Int, rotation: Int) {
+    val sessionId = boundSessionId
     post {
-      if (!released) {
+      if (!released && sessionId != null && boundSessionId == sessionId) {
+        onFrameResolution(mapOf(
+          "sessionId" to sessionId,
+          "width" to videoWidth,
+          "height" to videoHeight,
+          "rotation" to rotation,
+        ))
         renderer.requestLayout()
         invalidate()
       }

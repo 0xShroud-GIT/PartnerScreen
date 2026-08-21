@@ -2,6 +2,8 @@ export type PipMode = { isInPictureInPictureMode: boolean };
 
 export interface PipPort {
   enterPip(width: number, height: number): Promise<boolean>;
+  updatePipAspect(width: number, height: number): Promise<boolean>;
+  exitPip(): Promise<boolean>;
   isInPip(): Promise<boolean>;
   supportsPip(): boolean;
   subscribe(listener: (event: PipMode) => void): () => void;
@@ -9,6 +11,8 @@ export interface PipPort {
 
 type NativeModule = {
   enterPip(width: number, height: number): Promise<boolean>;
+  updatePipAspect(width: number, height: number): Promise<boolean>;
+  exitPip(): Promise<boolean>;
   isInPip(): Promise<boolean>;
   supportsPip(): boolean;
   addListener(eventName: 'onPipModeChanged', listener: (event: PipMode) => void): { remove(): void };
@@ -50,6 +54,18 @@ export class ExpoPip implements PipPort {
     try { return await native.enterPip(width, height); } catch { return false; }
   }
 
+  async updatePipAspect(width: number, height: number): Promise<boolean> {
+    const native = getNative();
+    if (!native) return false;
+    try { return await native.updatePipAspect(width, height); } catch { return false; }
+  }
+
+  async exitPip(): Promise<boolean> {
+    const native = getNative();
+    if (!native) return true;
+    try { return await native.exitPip(); } catch { return false; }
+  }
+
   async isInPip(): Promise<boolean> {
     const native = getNative();
     if (!native) return false;
@@ -75,6 +91,8 @@ export class ExpoPip implements PipPort {
 
 export class NoopPip implements PipPort {
   async enterPip(): Promise<boolean> { return false; }
+  async updatePipAspect(): Promise<boolean> { return false; }
+  async exitPip(): Promise<boolean> { return true; }
   async isInPip(): Promise<boolean> { return false; }
   supportsPip(): boolean { return false; }
   subscribe(): () => void { return () => undefined; }

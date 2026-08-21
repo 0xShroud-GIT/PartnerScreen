@@ -49,7 +49,11 @@ export class ScreenCaptureCoordinator {
       const session = this.session.getSnapshot();
       if (session.type !== 'Connected' || session.role !== 'sharer') throw new Error('Screen capture requires an accepted sharer session.');
       const expectedSessionId = session.sessionId;
-      if (this.state.type !== 'idle' && this.state.type !== 'error') throw new Error('Screen capture is already active.');
+      if (this.state.type !== 'idle' && this.state.type !== 'error') {
+        if (this.state.sessionId === expectedSessionId) throw new Error('Screen capture is already active.');
+        await this.port.stop().catch(() => undefined);
+        this.setState({ type: 'idle' });
+      }
       this.setState({ type: 'requesting_consent', sessionId: expectedSessionId });
       await this.record('capture_consent_requested');
 
@@ -109,6 +113,13 @@ export class ScreenCaptureCoordinator {
   }
 
   clearError(): void { if (this.state.type === 'error') this.setState({ type: 'idle' }); }
+  resetToIdle(): Promise<void> {
+    return this.enqueue(async () => {
+      const wasIdle = this.state.type === 'idle';
+      if (!wasIdle) await this.port.stop().catch(() => undefined);
+      this.setState({ type: 'idle' });
+    });
+  }
 
   dispose(): void {
     this.unsubscribeNative();
@@ -151,8 +162,10 @@ export class ScreenCaptureCoordinator {
 
   private async handleSessionState(): Promise<void> {
     const session = this.session.getSnapshot();
-    const ownsCapture = session.type === 'Connected' && session.role === 'sharer';
-    if (ownsCapture || this.state.type === 'idle' || this.state.type === 'error') return;
+    if (this.state.type === 'idle') return;
+    const currentId = this.state.type === 'error' ? null : this.state.sessionId;
+    const ownsThis = session.type === 'Connected' && session.role === 'sharer' && currentId === session.sessionId;
+    if (ownsThis) return;
     await this.port.stop().catch(() => undefined);
     this.setState({ type: 'idle' });
   }

@@ -16,10 +16,14 @@ class PartnerRequestNotificationModule : Module() {
   companion object {
     private const val CHANNEL_ID = "partnerscreen_incoming_request"
     private const val NOTIFICATION_ID = 7306
+    const val EXTRA_KIND = "partnerscreen_notification"
+    const val EXTRA_SESSION_ID = "partnerscreen_sessionId"
+    const val KIND_INCOMING_REQUEST = "incoming_request"
   }
 
   override fun definition() = ModuleDefinition {
     Name("PartnerRequestNotification")
+    Events("onIncomingRequestOpened")
 
     AsyncFunction("showRequestNotification") { sessionId: String, partnerName: String ->
       val context = appContext.reactContext ?: return@AsyncFunction false
@@ -29,8 +33,8 @@ class PartnerRequestNotificationModule : Module() {
       createChannel(context)
       val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
         flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        putExtra("partnerscreen_notification", "incoming_request")
-        putExtra("partnerscreen_sessionId", sessionId)
+        putExtra(EXTRA_KIND, KIND_INCOMING_REQUEST)
+        putExtra(EXTRA_SESSION_ID, sessionId)
       } ?: Intent().apply {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
       }
@@ -71,6 +75,27 @@ class PartnerRequestNotificationModule : Module() {
       val context = appContext.reactContext ?: return@Function false
       hasNotificationPermission(context)
     }
+
+    AsyncFunction("consumeLaunchSessionId") {
+      val activity = appContext.currentActivity ?: return@AsyncFunction null
+      takeIncomingSessionId(activity.intent)
+    }
+
+    OnActivityEntersForeground {
+      val activity = appContext.currentActivity ?: return@OnActivityEntersForeground
+      val sessionId = takeIncomingSessionId(activity.intent) ?: return@OnActivityEntersForeground
+      sendEvent("onIncomingRequestOpened", mapOf("sessionId" to sessionId))
+    }
+  }
+
+  private fun takeIncomingSessionId(intent: Intent?): String? {
+    if (intent == null) return null
+    val kind = intent.getStringExtra(EXTRA_KIND)
+    val sessionId = intent.getStringExtra(EXTRA_SESSION_ID)
+    if (kind != KIND_INCOMING_REQUEST || sessionId.isNullOrBlank()) return null
+    intent.removeExtra(EXTRA_KIND)
+    intent.removeExtra(EXTRA_SESSION_ID)
+    return sessionId
   }
 
   private fun hasNotificationPermission(context: Context): Boolean {

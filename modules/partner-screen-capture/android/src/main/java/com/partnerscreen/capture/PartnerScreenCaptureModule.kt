@@ -23,7 +23,7 @@ class PartnerScreenCaptureModule : Module() {
     Events("onPartnerScreenCaptureEvent", "onPartnerScreenMediaEvent")
 
     View(PartnerRemoteVideoView::class) {
-      Events("onFirstFrame")
+      Events("onFirstFrame", "onFrameResolution")
       Prop("sessionId") { view: PartnerRemoteVideoView, value: String -> view.bindSession(value) }
       OnViewDestroys { view: PartnerRemoteVideoView -> view.release() }
     }
