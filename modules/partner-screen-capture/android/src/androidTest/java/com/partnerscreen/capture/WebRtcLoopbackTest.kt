@@ -107,17 +107,22 @@ class WebRtcLoopbackTest {
     answererObserver: LoopObserver,
     iceRestart: Boolean,
   ) {
+    // Candidate callbacks can race SDP callbacks. Queue both directions at the
+    // beginning of every negotiation/restart and release each direction only after
+    // the destination PeerConnection has the matching remote description.
+    offererObserver.disableRemoteCandidates()
+    answererObserver.disableRemoteCandidates()
+
     val constraints = MediaConstraints()
     if (iceRestart) constraints.mandatory.add(MediaConstraints.KeyValuePair("IceRestart", "true"))
     val offer = createDescription(offerer, true, constraints)
     setDescription(offerer, true, offer)
     setDescription(answerer, false, offer)
     offererObserver.enableRemoteCandidates()
-    answererObserver.enableRemoteCandidates()
+
     val answer = createDescription(answerer, false, MediaConstraints())
     setDescription(answerer, true, answer)
     setDescription(offerer, false, answer)
-    offererObserver.enableRemoteCandidates()
     answererObserver.enableRemoteCandidates()
   }
 
@@ -188,6 +193,10 @@ class WebRtcLoopbackTest {
     private var remote: PeerConnection? = null
 
     fun connectRemote(peer: PeerConnection) { remote = peer }
+
+    fun disableRemoteCandidates() {
+      remoteReady.set(false)
+    }
 
     fun enableRemoteCandidates() {
       remoteReady.set(true)
