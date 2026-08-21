@@ -31,7 +31,7 @@ jobs:
             > /tmp/partnerscreen-import.b64
 
           base64 --decode /tmp/partnerscreen-import.b64 > /tmp/partnerscreen-import.tar.xz
-          echo '8b41836ed4d4d3d34f5ca80ca46324fcf62e183465c387cd4dcec5b11161a3ca  /tmp/partnerscreen-import.tar.xz' | sha256sum --check --strict
+          xz --test /tmp/partnerscreen-import.tar.xz
 
           mkdir -p /tmp/partnerscreen-canonical
           tar -xJf /tmp/partnerscreen-import.tar.xz -C /tmp/partnerscreen-canonical
@@ -48,6 +48,13 @@ jobs:
           test -d /tmp/partnerscreen-canonical/tests
           test -d /tmp/partnerscreen-canonical/docs
 
+          git -C /tmp/partnerscreen-canonical init -q
+          git -C /tmp/partnerscreen-canonical add -A
+          tree_sha="$(git -C /tmp/partnerscreen-canonical write-tree)"
+          echo "canonical tree: $tree_sha"
+          test "$tree_sha" = '627235b5739c127db6667660c81a7051b7c48893'
+          rm -rf /tmp/partnerscreen-canonical/.git
+
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -a /tmp/partnerscreen-canonical/. .
           test ! -e .import
@@ -56,5 +63,8 @@ jobs:
           git config user.name '0xShroud-GIT'
           git config user.email '0xshroud.me@gmail.com'
           git add -A
+          final_tree="$(git write-tree)"
+          echo "final tree: $final_tree"
+          test "$final_tree" = '627235b5739c127db6667660c81a7051b7c48893'
           git commit -m 'Import canonical PartnerScreen working repository'
           git push origin HEAD:main
