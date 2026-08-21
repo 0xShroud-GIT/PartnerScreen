@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DeterministicPartnerScreenTwin } from './DeterministicTwin';
 import { RuntimeInvariantMonitor } from '../../src/runtime/RuntimeInvariantMonitor';
+import { PAIRING_QR_TTL_MS } from '../../src/domain/pairing/PairingQr';
+import { CONTROL_REQUEST_TIMEOUT_MS } from '../../src/protocol/ControlMessage';
 import { VirtualClock } from './VirtualClock';
 import { VirtualNetwork } from './VirtualNetwork';
 
@@ -52,6 +54,45 @@ test('VirtualClock advances long timeout/reconnect windows without sleeping', as
   assert.deepEqual(fired, [6_000]);
   await clock.advanceBy(10_000);
   assert.deepEqual(fired, [6_000, 16_000]);
+});
+
+test('PairingService expiry is owned by VirtualClock, not wall time', async () => {
+  const twin = new DeterministicPartnerScreenTwin(102);
+  try {
+    await twin.initialize();
+    await twin.alice.pairingService.startCreator();
+    assert.equal(twin.alice.pairingService.getSnapshot().kind, 'creator_qr');
+
+    await twin.advanceBy(PAIRING_QR_TTL_MS - 1);
+    assert.equal(twin.alice.pairingService.getSnapshot().kind, 'creator_qr');
+
+    await twin.advanceBy(1);
+    assert.equal(twin.alice.pairingService.getSnapshot().kind, 'error');
+    assert.ok(twin.alice.diagnostics.events.includes('pairing_failed'));
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('SessionController request expiry is owned by VirtualClock, not wall time', async () => {
+  const twin = new DeterministicPartnerScreenTwin(103);
+  try {
+    await twin.initialize();
+    await twin.pair();
+    await twin.requestScreen(twin.alice);
+    await twin.flushUntil(() => twin.bob.sessionController.getSnapshot().type === 'IncomingRequest');
+    assert.equal(twin.alice.sessionController.getSnapshot().type, 'OutgoingRequest');
+
+    await twin.advanceBy(CONTROL_REQUEST_TIMEOUT_MS - 1);
+    assert.equal(twin.alice.sessionController.getSnapshot().type, 'OutgoingRequest');
+
+    await twin.advanceBy(1);
+    assert.notEqual(twin.alice.sessionController.getSnapshot().type, 'OutgoingRequest');
+    assert.notEqual(twin.bob.sessionController.getSnapshot().type, 'IncomingRequest');
+    assert.ok(twin.alice.diagnostics.events.includes('session_timeout'));
+  } finally {
+    twin.dispose();
+  }
 });
 
 test('VirtualNetwork provides deterministic latency/loss/outage controls without wall-clock waits', async () => {
