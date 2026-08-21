@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { ActivityIndicator, AppState, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
 import { PartnerRemoteVideoView } from '../modules/partner-screen-capture';
 import { useMediaSession } from '../src/presentation/useMediaSession';
 import { useSession } from '../src/presentation/useSession';
@@ -38,8 +38,7 @@ export default function ViewerScreen() {
   const enterPip = useCallback(async () => {
     if (!appServices.pipPort.supportsPip()) return;
     const { width, height } = videoSizeRef.current;
-    const ok = await appServices.pipPort.enterPip(width, height).catch(() => false);
-    if (ok) void appServices.diagnosticsRepository.append('pip_entered').catch(() => undefined);
+    await appServices.pipPort.enterPip(width, height).catch(() => false);
   }, []);
 
   useEffect(() => {
@@ -70,27 +69,16 @@ export default function ViewerScreen() {
     };
   }, [requesterSessionId]);
 
-  // PiP mode tracking for diagnostics and to keep video rendering in PiP while session active.
+  // PiP mode tracking to keep video rendering in PiP while session active.
   useEffect(() => {
     const sub = appServices.pipPort.subscribe((event) => {
       setIsPip(event.isInPictureInPictureMode);
-      void appServices.diagnosticsRepository.append(event.isInPictureInPictureMode ? 'pip_entered' : 'pip_exited').catch(() => undefined);
     });
     return () => sub();
   }, []);
 
-  // Auto-enter PiP when viewer is live and app goes background (Android appropriate, not surprising navigation).
-  // If session is live and user backgrounds, opportunistically enter PiP so remote video continues.
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'background' && requesterSessionId && media.state.type === 'live' && media.state.sessionId === requesterSessionId) {
-        void enterPip();
-      }
-      if (state === 'active') void appServices.diagnosticsRepository.append('app_foregrounded').catch(() => undefined);
-      if (state === 'background') void appServices.diagnosticsRepository.append('app_backgrounded').catch(() => undefined);
-    });
-    return () => sub.remove();
-  }, [requesterSessionId, media.state, enterPip]);
+  // Explicit PiP entry via button is preferred for reliability; auto-enter on background is omitted for first release.
+  // Viewer remains awake via keep-awake while foreground; background handling is via system PiP if user tapped.
 
   // If session ends/fails while in PiP, ensure we exit PiP or show terminal: viewer will unmount via returnHome,
   // which on Android will automatically leave PiP when the activity is finished.
