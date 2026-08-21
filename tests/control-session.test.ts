@@ -36,7 +36,11 @@ class FakeTransport implements ControlTransport {
   host: string;
   startCount = 0;
   stopCount = 0;
+  presenceStarts = 0;
+  presenceStops = 0;
   constructor(host: string, private readonly network: FakeNetwork) { this.host = host; }
+  async startTrustedPresence(): Promise<void> { this.presenceStarts += 1; }
+  async stopTrustedPresence(): Promise<void> { this.presenceStops += 1; }
   async startListener(): Promise<ControlListenerEndpoint> { this.startCount += 1; const endpoint = this.network.allocate(this); this.endpoint = endpoint; return endpoint; }
   async stopListener(listenerId: string): Promise<void> { this.stopCount += 1; if (this.endpoint?.listenerId === listenerId) { this.network.release(this.endpoint); this.endpoint = null; } }
   async connect(host: string, port: number): Promise<string> { return this.network.connect(this, host, port); }
@@ -48,6 +52,22 @@ class FakeTransport implements ControlTransport {
 function cipher(): AuthenticatedSignalingCipher { return new AuthenticatedSignalingCipher(new NodeAes(), new NodeHmac()); }
 async function settle(): Promise<void> { for (let i = 0; i < 6; i += 1) await new Promise<void>((resolve) => setImmediate(resolve)); }
 const deviceA = '11111111-1111-4111-8111-111111111111', deviceB = '22222222-2222-4222-8222-222222222222', pairId = '33333333-3333-4333-8333-333333333333', secret = 'ab'.repeat(32);
+
+test('pair activation starts trusted presence; JS recreation can reattach the same native listener', async () => {
+  const network = new FakeNetwork(), transport = new FakeTransport('192.168.8.10', network);
+  const session = new ControlSession(transport, cipher());
+  await session.activate({ pairId, localDeviceId: deviceA, partnerDeviceId: deviceB, pairSecretHex: secret });
+  const first = await session.ensureListening();
+  assert.equal(transport.presenceStarts, 1);
+  assert.ok(transport.startCount >= 1);
+  const starts = transport.startCount;
+  const again = await session.ensureListening();
+  assert.equal(again.port, first.port);
+  assert.equal(transport.startCount, starts);
+  await session.deactivate();
+  assert.ok(transport.presenceStops >= 1);
+  session.dispose();
+});
 
 test('two control sessions mutually authenticate before routing sealed messages', async () => {
   const network = new FakeNetwork(), transportA = new FakeTransport('192.168.1.10', network), transportB = new FakeTransport('192.168.1.11', network);

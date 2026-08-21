@@ -1,1 +1,11 @@
-<manifest />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+  <application>
+    <service
+      android:name="com.partnerscreen.control.PartnerTrustedPresenceService"
+      android:exported="false"
+      android:foregroundServiceType="connectedDevice"
+      android:stopWithTask="false" />
+  </application>
+</manifest>

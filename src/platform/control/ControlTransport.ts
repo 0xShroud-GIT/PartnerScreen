@@ -11,6 +11,8 @@ export interface ControlTransport {
   send(connectionId: string, frame: string): Promise<void>;
   close(connectionId: string): Promise<void>;
   subscribe(listener: (event: ControlTransportEvent) => void): () => void;
+  startTrustedPresence?(): Promise<void>;
+  stopTrustedPresence?(): Promise<void>;
 }
 type NativeControlModule = {
   startListener(): Promise<ControlListenerEndpoint>;
@@ -18,6 +20,9 @@ type NativeControlModule = {
   connect(host: string, port: number): Promise<string>;
   send(connectionId: string, frame: string): Promise<void>;
   close(connectionId: string): Promise<void>;
+  startTrustedPresence?(): Promise<boolean>;
+  stopTrustedPresence?(): Promise<boolean>;
+  getActiveListener?(): ControlListenerEndpoint | null;
   addListener(eventName: 'onPartnerControlEvent', listener: (event: unknown) => void): { remove(): void };
 };
 declare const require: (modulePath: string) => { default: NativeControlModule };
@@ -79,6 +84,14 @@ function parseEvent(value: unknown): ControlTransportEvent | null {
 }
 
 export class ExpoControlTransport implements ControlTransport {
+  async startTrustedPresence(): Promise<void> {
+    try { await withTimeout(module().startTrustedPresence?.() ?? Promise.resolve(true), NATIVE_CONTROL_CONNECT_TIMEOUT_MS, 'Trusted presence start timed out.'); }
+    catch { /* presence is best-effort; listener still required */ }
+  }
+  async stopTrustedPresence(): Promise<void> {
+    try { await withTimeout(module().stopTrustedPresence?.() ?? Promise.resolve(true), NATIVE_CONTROL_CLEANUP_TIMEOUT_MS, 'Trusted presence stop timed out.'); }
+    catch { /* best effort */ }
+  }
   async startListener(): Promise<ControlListenerEndpoint> {
     try {
       const value = await withTimeout(module().startListener(), NATIVE_CONTROL_CONNECT_TIMEOUT_MS, 'Control listener start timed out.');

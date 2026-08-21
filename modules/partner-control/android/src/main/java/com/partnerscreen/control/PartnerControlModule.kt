@@ -36,19 +36,73 @@ private data class ListenerHandle(val socket: ServerSocket, val host: String)
 private data class ConnectionHandle(val socket: Socket, val writeLock: Any = Any())
 
 class PartnerControlModule : Module() {
-  private val listeners = ConcurrentHashMap<String, ListenerHandle>()
-  private val connections = ConcurrentHashMap<String, ConnectionHandle>()
-  private val connectionLock = Any()
-  // Accepts must not share a pool with blocked reads/writes: a stuck TCP read must never
-  // starve listener accepts or control sends. Probe connect-and-close also classifies on IO.
-  private val acceptExecutor: ExecutorService = Executors.newFixedThreadPool(ACCEPT_WORKERS)
-  private val ioExecutor: ExecutorService = Executors.newFixedThreadPool(IO_WORKERS)
+  companion object {
+    private val listeners = ConcurrentHashMap<String, ListenerHandle>()
+    private val connections = ConcurrentHashMap<String, ConnectionHandle>()
+    private val connectionLock = Any()
+    private val pendingEvents = ArrayDeque<Map<String, Any>>()
+    @Volatile var presenceRequired = false
+    @Volatile private var eventSink: ((Map<String, Any>) -> Unit)? = null
+    // Accepts must not share a pool with blocked reads/writes: a stuck TCP read must never
+    // starve listener accepts or control sends. Probe connect-and-close also classifies on IO.
+    private val acceptExecutor: ExecutorService = Executors.newFixedThreadPool(ACCEPT_WORKERS)
+    private val ioExecutor: ExecutorService = Executors.newFixedThreadPool(IO_WORKERS)
+
+    fun currentListener(): Map<String, Any>? {
+      val entry = listeners.entries.firstOrNull() ?: return null
+      return mapOf("listenerId" to entry.key, "host" to entry.value.host, "port" to entry.value.socket.localPort)
+    }
+
+    fun attachSink(sink: ((Map<String, Any>) -> Unit)?) {
+      eventSink = sink
+      if (sink == null) return
+      val replay: List<Map<String, Any>>
+      synchronized(pendingEvents) {
+        replay = pendingEvents.toList()
+        pendingEvents.clear()
+      }
+      for (event in replay) sink(event)
+    }
+
+    fun emitEvent(event: Map<String, Any>) {
+      val sink = eventSink
+      if (sink != null) {
+        sink(event)
+        return
+      }
+      synchronized(pendingEvents) {
+        if (pendingEvents.size >= 16) pendingEvents.removeFirst()
+        pendingEvents.addLast(event)
+      }
+    }
+  }
 
   override fun definition() = ModuleDefinition {
     Name("PartnerControl")
     Events("onPartnerControlEvent")
 
+    OnCreate {
+      attachSink { event -> sendEvent("onPartnerControlEvent", event) }
+    }
+
+    AsyncFunction("startTrustedPresence") {
+      presenceRequired = true
+      val context = appContext.reactContext?.applicationContext ?: throw IllegalStateException("Android context is unavailable.")
+      PartnerTrustedPresenceService.start(context)
+      true
+    }
+
+    AsyncFunction("stopTrustedPresence") {
+      presenceRequired = false
+      val context = appContext.reactContext?.applicationContext
+      if (context != null) PartnerTrustedPresenceService.stop(context)
+      true
+    }
+
+    Function("getActiveListener") { currentListener() }
+
     AsyncFunction("startListener") {
+      currentListener()?.let { return@AsyncFunction it }
       require(listeners.isEmpty()) { "A control listener is already active." }
       val wifi = activeWifiEndpoint() ?: throw IllegalStateException("Control requires an active private IPv4 Wi-Fi address.")
       val server = ServerSocket()
@@ -117,7 +171,10 @@ class PartnerControlModule : Module() {
 
     AsyncFunction("close") { connectionId: String -> closeConnection(connectionId, emit = true) }
 
-    OnDestroy { shutdownAll() }
+    OnDestroy {
+      attachSink(null)
+      if (!presenceRequired) shutdownAll()
+    }
   }
 
   private fun acceptLoop(listenerId: String, server: ServerSocket) {
@@ -174,7 +231,7 @@ class PartnerControlModule : Module() {
       emitError("busy", null)
       return
     }
-    sendEvent("onPartnerControlEvent", mapOf(
+    emitEvent(mapOf(
       "type" to "message",
       "connectionId" to connectionId,
       "frame" to String(firstFrame, StandardCharsets.UTF_8),
@@ -193,7 +250,7 @@ class PartnerControlModule : Module() {
     connections[connectionId] = ConnectionHandle(socket)
     val event = mutableMapOf<String, Any>("type" to "connected", "connectionId" to connectionId, "direction" to direction)
     if (listenerId != null) event["listenerId"] = listenerId
-    sendEvent("onPartnerControlEvent", event)
+    emitEvent(event)
     if (direction == "outbound") ioExecutor.execute { readLoop(connectionId, socket) }
     return connectionId
   }
@@ -206,7 +263,7 @@ class PartnerControlModule : Module() {
         if (length <= 0 || length > MAX_FRAME_BYTES) { emitError("invalid_frame_size", connectionId); break }
         val bytes = ByteArray(length)
         input.readFully(bytes)
-        sendEvent("onPartnerControlEvent", mapOf(
+        emitEvent(mapOf(
           "type" to "message",
           "connectionId" to connectionId,
           "frame" to String(bytes, StandardCharsets.UTF_8),
@@ -223,19 +280,22 @@ class PartnerControlModule : Module() {
   private fun closeConnection(connectionId: String, emit: Boolean) {
     val removed = synchronized(connectionLock) { connections.remove(connectionId) } ?: return
     try { removed.socket.close() } catch (_: Exception) { /* best effort */ }
-    if (emit) sendEvent("onPartnerControlEvent", mapOf("type" to "closed", "connectionId" to connectionId))
+    if (emit) emitEvent(mapOf("type" to "closed", "connectionId" to connectionId))
   }
 
   private fun emitError(code: String, connectionId: String?) {
     val event = mutableMapOf<String, Any>("type" to "error", "code" to code)
     if (connectionId != null) event["connectionId"] = connectionId
-    sendEvent("onPartnerControlEvent", event)
+    emitEvent(event)
+  }
+
+  private fun emitListenerError(code: String, listenerId: String) {
+    emitEvent(mapOf("type" to "error", "code" to code, "listenerId" to listenerId))
   }
 
   private fun shutdownAll() {
     listeners.keys.toList().forEach { id -> try { listeners.remove(id)?.socket?.close() } catch (_: Exception) { } }
     connections.keys.toList().forEach { id -> closeConnection(id, emit = false) }
-    executor.shutdownNow()
   }
 
   private fun activeWifiEndpoint(destination: Inet4Address? = null): WifiEndpoint? {

@@ -40,6 +40,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       { recordAudioAndroid: false, barcodeScannerEnabled: true },
     ],
     './plugins/withPip',
+    './plugins/withTrustedPresence',
   ],
   extra: {
     ...config.extra,
