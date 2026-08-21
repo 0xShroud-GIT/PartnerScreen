@@ -29,7 +29,8 @@ version_at_least() {
 maestro_on() {
   local serial="$1" flow="$2"
   shift 2
-  "$MAESTRO_BIN" test --device "$serial" "$@" "$flow"
+  # --device is a Maestro global option and must precede the test subcommand.
+  "$MAESTRO_BIN" --device "$serial" test "$@" "$flow"
 }
 
 require_command adb
