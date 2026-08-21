@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true, "types": ["node"] },
+  "include": [
+    "tests/media-session.test.ts",
+    "tests/media-protocol.test.ts",
+    "tests/screen-capture-coordinator.test.ts",
+    "tests/session-controller.test.ts"
+  ],
+  "exclude": []
+}

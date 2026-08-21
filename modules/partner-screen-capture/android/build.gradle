@@ -1,0 +1,19 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.partnerscreen.capture'
+version = '0.1.0'
+
+android {
+  namespace "com.partnerscreen.capture"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+}
+
+dependencies {
+  implementation 'org.jitsi:webrtc:124.0.0'
+}
