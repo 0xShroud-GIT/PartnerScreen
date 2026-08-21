@@ -65,16 +65,16 @@ internal class SyntheticVideoCapturer : VideoCapturer {
     if (!capturing) return
     val index = frameCounter.incrementAndGet()
     val buffer = JavaI420Buffer.allocate(width, height)
+    val yValue = (16 + (index % 200)).toByte()
+    fill(buffer.dataY, buffer.strideY * height, yValue)
+    fill(buffer.dataU, buffer.strideU * ((height + 1) / 2), 128.toByte())
+    fill(buffer.dataV, buffer.strideV * ((height + 1) / 2), 128.toByte())
+    val frame = VideoFrame(buffer, 0, System.nanoTime())
     try {
-      val yValue = (16 + (index % 200)).toByte()
-      fill(buffer.dataY, buffer.strideY * height, yValue)
-      fill(buffer.dataU, buffer.strideU * ((height + 1) / 2), 128.toByte())
-      fill(buffer.dataV, buffer.strideV * ((height + 1) / 2), 128.toByte())
-      val frame = VideoFrame(buffer, 0, System.nanoTime())
-      try { observer?.onFrameCaptured(frame) } finally { frame.release() }
-    } catch (error: Throwable) {
-      buffer.release()
-      throw error
+      observer?.onFrameCaptured(frame)
+    } finally {
+      // VideoFrame owns the initial JavaI420Buffer reference.
+      frame.release()
     }
   }
 
