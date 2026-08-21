@@ -1,15 +1,1 @@
-package com.partnerscreen.pip
-
-import android.app.PictureInPictureParams
-import android.util.Rational
-
-/** Production PiP geometry conversion shared with native tests. */
-internal object PipParamsFactory {
-  fun create(width: Int, height: Int): PictureInPictureParams {
-    val w = width.coerceIn(1, 1920)
-    val h = height.coerceIn(1, 1920)
-    return PictureInPictureParams.Builder()
-      .setAspectRatio(Rational(w, h))
-      .build()
-  }
-}
+fatal: path 'modules/partner-pip/android/src/main/java/com/partnerscreen/pip/PipParamsFactory.kt' exists on disk, but not in 'tmp/pr11'
