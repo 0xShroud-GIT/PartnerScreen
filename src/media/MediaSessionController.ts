@@ -2,7 +2,9 @@ import type { ScreenCaptureState } from '../capture/ScreenCaptureCoordinator';
 import type { DiagnosticEventKind } from '../domain/diagnostics/DiagnosticEvent';
 import type { AnyMediaControlMessage, ControlPayloadMap, MediaControlMessageType } from '../protocol/ControlMessage';
 import type { SessionState } from '../session/SessionState';
+import type { SanitizedIceClassification } from './IceCandidateClassification';
 import { measuredBitrateBps, qualityFromStats, sanitizeMediaStats, type SanitizedMediaStats } from './MediaStats';
+import { emptyMediaTransportSnapshot, type MediaTransportSnapshot } from './MediaTransportSnapshot';
 import type { WebRtcMediaNativeEvent, WebRtcMediaPort } from './WebRtcMediaPort';
 
 export const MEDIA_RECONNECT_MAX_ATTEMPTS = 3;
@@ -61,6 +63,7 @@ export class MediaSessionController {
   private liveHealth: 'good' | 'degraded' = 'good';
   private previousBytesSent: { bytesSent: number; atMs: number } | null = null;
   private previousPacketsLost: number | undefined;
+  private transport: MediaTransportSnapshot = emptyMediaTransportSnapshot();
 
   constructor(
     private readonly native: WebRtcMediaPort,
@@ -80,6 +83,7 @@ export class MediaSessionController {
   getSnapshot = (): MediaSessionState => this.state;
   getStatsSnapshot = (): SanitizedMediaStats | null => this.stats;
   getLiveHealth = (): 'good' | 'degraded' => this.liveHealth;
+  getTransportSnapshot = (): MediaTransportSnapshot => this.transport;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   reconcile(): Promise<void> { return this.enqueue(() => this.syncAuthority()); }
   clearError(): Promise<void> { return this.enqueue(async () => {
@@ -110,6 +114,7 @@ export class MediaSessionController {
     this.clearDeadlines();
     this.liveHealth = 'good';
     this.setState({ type: 'live', sessionId, quality: 'good', trackEpoch });
+    this.transport = { ...this.transport, firstRenderedFrame: true };
     this.scheduleStats(sessionId);
     await this.record('media_first_frame');
     if (recovered) await this.record('media_reconnected');
@@ -215,6 +220,8 @@ export class MediaSessionController {
   private async handleNative(event: WebRtcMediaNativeEvent): Promise<void> {
     const session = this.session.getSnapshot();
     if (session.type !== 'Connected' || session.sessionId !== event.sessionId) { await this.native.close(event.sessionId).catch(() => undefined); return; }
+    this.observeNative(event);
+    if (event.type === 'ice_state' || event.type === 'ice_classified' || event.type === 'renderer') return;
     if (event.type === 'ice_candidate') {
       try { await this.session.sendMedia(event.sessionId, 'ICE_CANDIDATE', { sdpMid: event.sdpMid, sdpMLineIndex: event.sdpMLineIndex, candidate: event.candidate }); }
       catch { await this.failMedia(event.sessionId, 'Private network candidate signaling failed.'); }
@@ -414,7 +421,48 @@ export class MediaSessionController {
   private clearInitialDeadline(): void { this.initialDeadlineTimer?.cancel(); this.initialDeadlineTimer = null; }
   private clearStatsTimer(): void { this.statsTimer?.cancel(); this.statsTimer = null; }
   private clearDeadlines(): void { this.clearInitialDeadline(); this.clearStatsTimer(); }
-  private clearStats(): void { this.clearStatsTimer(); this.stats = null; this.liveHealth = 'good'; this.previousBytesSent = null; this.previousPacketsLost = undefined; }
+  private clearStats(): void { this.clearStatsTimer(); this.stats = null; this.liveHealth = 'good'; this.previousBytesSent = null; this.previousPacketsLost = undefined; this.transport = emptyMediaTransportSnapshot(); }
+  private observeNative(event: WebRtcMediaNativeEvent): void {
+    if (event.type === 'connection_state') {
+      this.transport = { ...this.transport, peerConnectionState: event.state };
+      return;
+    }
+    if (event.type === 'ice_state') {
+      this.transport = { ...this.transport, iceConnectionState: event.iceConnectionState, iceGatheringState: event.iceGatheringState };
+      return;
+    }
+    if (event.type === 'ice_classified') {
+      this.applyClassification(event.classification);
+      return;
+    }
+    if (event.type === 'renderer') {
+      this.transport = {
+        ...this.transport,
+        rendererAttached: event.attached,
+        rendererWidth: event.width ?? this.transport.rendererWidth,
+        rendererHeight: event.height ?? this.transport.rendererHeight,
+        rendererRotation: event.rotation ?? this.transport.rendererRotation,
+      };
+    }
+  }
+  private applyClassification(classification: SanitizedIceClassification): void {
+    const next = { ...this.transport, lastRejectionReason: classification.rejectionReason ?? this.transport.lastRejectionReason };
+    if (classification.direction === 'local') {
+      next.localCandidatesGenerated += 1;
+      next.lastLocalType = classification.candidateType;
+      next.lastLocalTransport = classification.transport;
+      next.lastLocalAddressFamily = classification.addressFamily;
+      if (classification.accepted) next.localAccepted += 1;
+      else next.localRejected += 1;
+    } else {
+      next.lastRemoteType = classification.candidateType;
+      next.lastRemoteTransport = classification.transport;
+      next.lastRemoteAddressFamily = classification.addressFamily;
+      if (classification.accepted) next.remoteAccepted += 1;
+      else next.remoteRejected += 1;
+    }
+    this.transport = next;
+  }
   private record(kind: DiagnosticEventKind): Promise<void> { return this.diagnostics.append(kind).catch(() => undefined); }
   private setState(next: MediaSessionState): void { this.state = next; for (const listener of this.listeners) listener(); }
   private enqueue(operation: () => Promise<void>): Promise<void> { const result = this.operationQueue.then(operation); this.operationQueue = result.then(() => undefined, () => undefined); return result; }
