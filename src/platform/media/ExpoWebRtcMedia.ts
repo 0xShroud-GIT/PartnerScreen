@@ -87,6 +87,15 @@ export class ExpoWebRtcMedia implements WebRtcMediaPort {
     await withTimeout(PartnerScreenCaptureModule.closeMedia(sessionId), NATIVE_MEDIA_CLOSE_TIMEOUT_MS, 'Media close timed out.').catch(() => undefined);
   }
 
+  async restartIce(sessionId: string): Promise<boolean> {
+    if (!validSession(sessionId)) return false;
+    try {
+      return await withTimeout(PartnerScreenCaptureModule.restartIce(sessionId), NATIVE_MEDIA_CLOSE_TIMEOUT_MS, 'ICE restart timed out.');
+    } catch {
+      return false;
+    }
+  }
+
   async getStats(sessionId: string): Promise<SanitizedMediaStats | null> {
     if (!validSession(sessionId)) return null;
     try {

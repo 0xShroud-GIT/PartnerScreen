@@ -319,6 +319,20 @@ public final class WebRtcEngine {
     }
   }
 
+  public boolean restartIce(String sessionId) {
+    synchronized (lock) {
+      if (peerConnection == null || mediaSessionId == null || !mediaSessionId.equals(sessionId)) return false;
+      try {
+        // Jitsi WebRTC 124 / org.webrtc.PeerConnection.restartIce() marks ICE for restart.
+        // The next createOffer() includes new ICE credentials without recreating the PeerConnection.
+        peerConnection.restartIce();
+        return true;
+      } catch (RuntimeException ignored) {
+        return false;
+      }
+    }
+  }
+
   public void closeMedia(String sessionId) {
     final PeerConnection closingPeer;
     synchronized (lock) {

@@ -12,6 +12,7 @@ declare class PartnerScreenCaptureModule extends NativeModule<PartnerScreenCaptu
   acceptAnswer(sessionId: string, sdp: string): Promise<boolean>;
   addIceCandidate(sessionId: string, sdpMid: string, sdpMLineIndex: number, candidate: string): Promise<boolean>;
   closeMedia(sessionId: string): Promise<boolean>;
+  restartIce(sessionId: string): Promise<boolean>;
   getMediaStats(sessionId: string): Promise<Record<string, unknown> | null>;
 }
 
