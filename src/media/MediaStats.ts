@@ -10,7 +10,7 @@ export type SanitizedMediaStats = {
   frameWidth?: number;
   frameHeight?: number;
   candidatePairState?: 'succeeded';
-  bitrateParametersApplied?: boolean;
+  bitrateParametersState?: 'applied' | 'failed';
   measuredBitrateBps?: number;
 };
 
@@ -50,7 +50,9 @@ export function sanitizeMediaStats(raw: unknown): SanitizedMediaStats | null {
     if (value !== undefined) stats[key] = value;
   }
   if (input.candidatePairState === 'succeeded') stats.candidatePairState = 'succeeded';
-  if (typeof input.bitrateParametersApplied === 'boolean') stats.bitrateParametersApplied = input.bitrateParametersApplied;
+  if (input.bitrateParametersState === 'applied' || input.bitrateParametersState === 'failed') {
+    stats.bitrateParametersState = input.bitrateParametersState;
+  }
   return Object.keys(stats).length > 0 ? stats : null;
 }
 

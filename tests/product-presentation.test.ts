@@ -72,6 +72,37 @@ test('LIVE requires authoritative media live state', () => {
   assert.match(state.detail, /actual remote video frame/i);
 });
 
+test('encoder bitrate warning is omitted for viewers and applied senders', () => {
+  const requester = { type: 'Connected', pair, sessionId, role: 'requester' } as const;
+  const viewerFailed = deriveProductPresentation({
+    session: requester,
+    capture: { type: 'idle' },
+    media: { type: 'live', sessionId, quality: 'good', trackEpoch: 1 },
+    mediaStats: { measuredBitrateBps: 400_000, bitrateParametersState: 'failed' },
+  });
+  assert.equal(viewerFailed.phase, 'live');
+  assert.doesNotMatch(viewerFailed.detail, /encoder bitrate cap/i);
+
+  const sharer = { type: 'Connected', pair, sessionId, role: 'sharer' } as const;
+  const applied = deriveProductPresentation({
+    session: sharer,
+    capture: { type: 'capturing', sessionId },
+    media: { type: 'publishing', sessionId, quality: 'good' },
+    mediaStats: { bitrateParametersState: 'applied' },
+  });
+  assert.equal(applied.phase, 'sharing');
+  assert.doesNotMatch(applied.detail, /encoder bitrate cap/i);
+
+  const failed = deriveProductPresentation({
+    session: sharer,
+    capture: { type: 'capturing', sessionId },
+    media: { type: 'publishing', sessionId, quality: 'good' },
+    mediaStats: { bitrateParametersState: 'failed' },
+  });
+  assert.equal(failed.phase, 'sharing');
+  assert.match(failed.detail, /encoder bitrate cap was not applied/i);
+});
+
 test('any authoritative error fails closed in presentation', () => {
   assert.equal(derive({ type: 'Error', pair, message: 'safe' }).phase, 'error');
   assert.equal(derive({ type: 'PairedOffline', pair }, { type: 'error', message: 'safe' }).phase, 'error');

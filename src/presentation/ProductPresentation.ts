@@ -45,8 +45,13 @@ function statsDetail(stats: SanitizedMediaStats | null | undefined): string {
   if (typeof stats.measuredBitrateBps === 'number') parts.push(`measured ${Math.round(stats.measuredBitrateBps / 1000)} kbps`);
   if (typeof stats.framesPerSecond === 'number') parts.push(`${Math.round(stats.framesPerSecond)} fps`);
   if (typeof stats.frameWidth === 'number' && typeof stats.frameHeight === 'number') parts.push(`${stats.frameWidth}×${stats.frameHeight}`);
-  if (stats.bitrateParametersApplied === false) parts.push('encoder bitrate cap was not applied');
   return parts.length > 0 ? ` ${parts.join(', ')}.` : '';
+}
+
+function encoderBitrateWarning(session: SessionState, stats: SanitizedMediaStats | null | undefined): string {
+  if (session.type !== 'Connected' || session.role !== 'sharer') return '';
+  if (stats?.bitrateParametersState !== 'failed') return '';
+  return ' encoder bitrate cap was not applied.';
 }
 
 export function deriveProductPresentation(input: ProductPresentationInput): ProductPresentation {
@@ -86,7 +91,10 @@ export function deriveProductPresentation(input: ProductPresentationInput): Prod
           return presentation('starting_capture', 'Starting screen capture', 'Consent was granted. PartnerScreen is starting the foreground capture service.', 'attention');
         }
         if (capture.type === 'capturing' && capture.sessionId === session.sessionId) {
-          return presentation('sharing', 'Screen capture active', media.type === 'publishing' || media.type === 'negotiating' ? 'Your screen is being captured; private-LAN video is still connecting.' : 'Your screen is being captured for the accepted trusted-partner session.', 'positive');
+          const sharingDetail = media.type === 'publishing' || media.type === 'negotiating'
+            ? 'Your screen is being captured; private-LAN video is still connecting.'
+            : 'Your screen is being captured for the accepted trusted-partner session.';
+          return presentation('sharing', 'Screen capture active', `${sharingDetail}${statsDetail(mediaStats)}${encoderBitrateWarning(session, mediaStats)}`, 'positive');
         }
         return presentation('connected', 'Request accepted — capture not active', 'The authenticated session exists, but Android screen capture has not started.', 'neutral');
       }

@@ -18,7 +18,7 @@ export interface SessionSource {
 
 export class IncomingRequestNotifier {
   private activeSessionId: string | null = null;
-  private generation = 0;
+  private desiredGeneration = 0;
   private permissionAsked = false;
   private operationQueue: Promise<void> = Promise.resolve();
   private readonly unsubscribe: () => void;
@@ -29,28 +29,43 @@ export class IncomingRequestNotifier {
     private readonly diagnostics: NotifierDiagnostics,
   ) {
     this.unsubscribe = this.session.subscribe(() => {
-      void this.enqueue(() => this.sync());
+      const generation = this.bumpGeneration();
+      void this.enqueue(() => this.sync(generation));
     });
-    void this.enqueue(() => this.sync());
+    const generation = this.bumpGeneration();
+    void this.enqueue(() => this.sync(generation));
+  }
+
+  getActiveSessionId(): string | null {
+    return this.activeSessionId;
   }
 
   dispose(): void {
     this.unsubscribe();
-    this.generation += 1;
+    this.bumpGeneration();
     if (this.activeSessionId) {
       void this.notifications.clearRequestNotification().catch(() => undefined);
       this.activeSessionId = null;
     }
   }
 
-  private async sync(): Promise<void> {
-    const generation = ++this.generation;
+  private bumpGeneration(): number {
+    this.desiredGeneration += 1;
+    return this.desiredGeneration;
+  }
+
+  private isCurrent(generation: number): boolean {
+    return generation === this.desiredGeneration;
+  }
+
+  private async sync(generation: number): Promise<void> {
+    if (!this.isCurrent(generation)) return;
     const state = this.session.getSnapshot();
 
     if ((isBasePairedState(state) || state.type === 'IncomingRequest') && !this.permissionAsked) {
       this.permissionAsked = true;
       await this.notifications.ensurePermission().catch(() => false);
-      if (generation !== this.generation) return;
+      if (!this.isCurrent(generation)) return;
     }
 
     if (state.type === 'IncomingRequest') {
@@ -58,10 +73,15 @@ export class IncomingRequestNotifier {
       const sessionId = state.sessionId;
       const partnerName = state.pair.partnerDeviceName;
       await this.notifications.ensurePermission().catch(() => false);
-      if (generation !== this.generation) return;
+      if (!this.isCurrent(generation)) return;
       const shown = await this.notifications.showRequestNotification(sessionId, partnerName).catch(() => false);
-      if (generation !== this.generation) {
-        await this.reconcileNative(sessionId);
+      if (!this.isCurrent(generation)) {
+        await this.reconcileNative();
+        return;
+      }
+      const latest = this.session.getSnapshot();
+      if (latest.type !== 'IncomingRequest' || latest.sessionId !== sessionId) {
+        await this.reconcileNative();
         return;
       }
       this.activeSessionId = sessionId;
@@ -70,27 +90,26 @@ export class IncomingRequestNotifier {
     }
 
     if (this.activeSessionId) {
-      this.activeSessionId = null;
-      try {
-        await this.notifications.clearRequestNotification();
-        if (generation !== this.generation) return;
-        await this.diagnostics.append('notification_cleared').catch(() => undefined);
-      } catch {
-        // best effort
+      await this.notifications.clearRequestNotification().catch(() => undefined);
+      if (!this.isCurrent(generation)) {
+        await this.reconcileNative();
+        return;
       }
+      const latest = this.session.getSnapshot();
+      if (latest.type === 'IncomingRequest') return;
+      this.activeSessionId = null;
+      await this.diagnostics.append('notification_cleared').catch(() => undefined);
     }
   }
 
-  private async reconcileNative(attemptedSessionId: string): Promise<void> {
-    const current = this.session.getSnapshot();
-    if (current.type === 'IncomingRequest' && current.sessionId === attemptedSessionId) return;
-    if (current.type !== 'IncomingRequest') {
-      await this.notifications.clearRequestNotification().catch(() => undefined);
-      this.activeSessionId = null;
+  private async reconcileNative(): Promise<void> {
+    const latest = this.session.getSnapshot();
+    if (latest.type === 'IncomingRequest') {
+      // Latest queued generation owns the show. A stale generation must not commit or overwrite.
       return;
     }
-    await this.notifications.showRequestNotification(current.sessionId, current.pair.partnerDeviceName).catch(() => undefined);
-    this.activeSessionId = current.sessionId;
+    await this.notifications.clearRequestNotification().catch(() => undefined);
+    this.activeSessionId = null;
   }
 
   private enqueue(operation: () => Promise<void>): Promise<void> {

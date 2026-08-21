@@ -50,10 +50,15 @@ export class SessionController {
     await this.pendingStore.clearOnStartup();
     this.pair = pair;
     await this.control.activate({ pairId: pair.pairId, localDeviceId: identity.deviceId, partnerDeviceId: pair.partnerDeviceId, pairSecretHex: secret });
-    if (this.state.type === 'Unpaired' || this.state.type === 'Error' || isBasePairedState(this.state)) this.setState(this.baseState());
+    if (this.state.type === 'Unpaired' || isBasePairedState(this.state)) this.setState(this.baseState());
   }); }
   deactivatePair(): Promise<void> { return this.enqueue(async () => { this.clearTimeout(); await this.pendingStore.clear().catch(() => undefined); await this.control.deactivate(); this.pair = null; this.lastAvailability = { kind: 'inactive' }; this.setState({ type: 'Unpaired' }); }); }
-  updateAvailability(snapshot: AvailabilitySnapshot): void { this.lastAvailability = snapshot; if (this.pair && (isBasePairedState(this.state) || this.state.type === 'Error')) this.setState(this.baseState()); }
+  updateAvailability(snapshot: AvailabilitySnapshot): void {
+    this.lastAvailability = snapshot;
+    // Availability may refresh cached reachability while Error is showing, but must never clear Error.
+    // recoverProductError()/clearError() is the only explicit path out of Error.
+    if (this.pair && isBasePairedState(this.state)) this.setState(this.baseState());
+  }
 
   requestScreen(): Promise<void> { return this.enqueue(async () => {
     if (this.state.type !== 'PairedAvailable') throw new Error('The trusted partner is not currently available.');

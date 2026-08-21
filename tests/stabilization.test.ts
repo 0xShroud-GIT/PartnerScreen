@@ -118,12 +118,14 @@ test('clear/recover path does not remove pairing and availability offline return
   await c2.mediaFailed(snap1.sessionId);
   await settle();
   assert.equal(c2.getSnapshot().type, 'Error');
-  // Switch availability to offline before recover
+  // Availability may refresh cached reachability but must never clear Error.
   c2.updateAvailability({ kind: 'offline', pair, localAdvertised: true });
   await settle();
-  // Because updateAvailability now handles Error, it should have moved to offline
+  assert.equal(c2.getSnapshot().type, 'Error');
+  assert.equal((c2.getSnapshot() as { pair: PairTrustMetadata }).pair.pairId, pair.pairId);
+  await c2.clearError();
+  await settle();
   assert.equal(c2.getSnapshot().type, 'PairedOffline');
-  // Ensure pairing still exists
   assert.equal((c2.getSnapshot() as { pair: PairTrustMetadata }).pair.pairId, pair.pairId);
   c2.dispose();
   controller.dispose();
@@ -145,12 +147,15 @@ test('availability update while in Error returns to accurate offline/available w
   await controller.mediaFailed(sid);
   await settle();
   assert.equal(controller.getSnapshot().type, 'Error');
-  // Partner goes offline
+  // Partner goes offline — Error must remain until explicit recovery.
   controller.updateAvailability({ kind: 'offline', pair, localAdvertised: true });
   await settle();
-  assert.equal(controller.getSnapshot().type, 'PairedOffline');
-  // Partner comes back available
+  assert.equal(controller.getSnapshot().type, 'Error');
+  // Partner comes back available — still Error; cached availability is updated only.
   controller.updateAvailability({ kind: 'available', pair, endpoint: { host: '192.168.1.11', port: 45001 }, serviceName: 'peer' });
+  await settle();
+  assert.equal(controller.getSnapshot().type, 'Error');
+  await controller.clearError();
   await settle();
   assert.equal(controller.getSnapshot().type, 'PairedAvailable');
   // Can request again without restart

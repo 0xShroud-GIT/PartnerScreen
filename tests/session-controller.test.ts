@@ -101,6 +101,27 @@ test('a fatal control error terminates the session and closes the underlying Con
   controller.dispose();
 });
 
+test('availability updates must not leave Error; clearError uses the latest cached availability', async () => {
+  const { control, controller } = harness();
+  await controller.activatePair(pair);
+  controller.updateAvailability({ kind: 'available', pair, endpoint: { host: '192.168.1.11', port: 45001 }, serviceName: 'peer' });
+  await controller.requestScreen();
+  control.emit({ type: 'message', message: remote('ACCEPT_SCREEN', {}) });
+  await settle();
+  const sid = (controller.getSnapshot() as { sessionId: string }).sessionId;
+  await controller.mediaFailed(sid);
+  await settle();
+  assert.equal(controller.getSnapshot().type, 'Error');
+  controller.updateAvailability({ kind: 'offline', pair, localAdvertised: true });
+  await settle();
+  assert.equal(controller.getSnapshot().type, 'Error');
+  assert.equal((controller.getSnapshot() as { pair: PairTrustMetadata }).pair.pairId, pair.pairId);
+  await controller.clearError();
+  await settle();
+  assert.equal(controller.getSnapshot().type, 'PairedOffline');
+  controller.dispose();
+});
+
 test('endSession(expectedSessionId) only terminates the exact matching Connected session', async () => {
   const { control, controller } = harness(); await controller.activatePair(pair);
   controller.updateAvailability({ kind: 'available', pair, endpoint: { host: '192.168.1.11', port: 45001 }, serviceName: 'peer' });

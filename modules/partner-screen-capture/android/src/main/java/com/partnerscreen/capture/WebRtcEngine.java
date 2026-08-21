@@ -86,7 +86,10 @@ public final class WebRtcEngine {
   private VideoSink rendererSink;
   private String rendererSessionId;
   private volatile EventListener eventListener;
-  private boolean bitrateParametersApplied = false;
+  private static final int BITRATE_NOT_ATTEMPTED = 0;
+  private static final int BITRATE_APPLIED = 1;
+  private static final int BITRATE_FAILED = 2;
+  private int bitrateParametersState = BITRATE_NOT_ATTEMPTED;
 
   private WebRtcEngine() {}
 
@@ -298,7 +301,7 @@ public final class WebRtcEngine {
       pendingRemoteCandidates.clear();
       remoteVideoTrack = null;
       localVideoSender = null;
-      bitrateParametersApplied = false;
+      bitrateParametersState = BITRATE_NOT_ATTEMPTED;
       closingPeer = peerConnection;
       peerConnection = null;
       mediaSessionId = null;
@@ -371,7 +374,7 @@ public final class WebRtcEngine {
 
   private boolean configureScreenShareSender(RtpSender sender) {
     if (sender == null) {
-      bitrateParametersApplied = false;
+      // Viewer / non-sender path: configuration was not attempted. Do not mark failed.
       return false;
     }
     try {
@@ -389,24 +392,24 @@ public final class WebRtcEngine {
       // org.webrtc RtpSender.setParameters returns boolean. Swallowing the result previously claimed
       // a bitrate cap that was never applied.
       boolean applied = sender.setParameters(parameters);
-      bitrateParametersApplied = applied;
+      bitrateParametersState = applied ? BITRATE_APPLIED : BITRATE_FAILED;
       return applied;
     } catch (RuntimeException ignored) {
-      bitrateParametersApplied = false;
+      bitrateParametersState = BITRATE_FAILED;
       return false;
     }
   }
 
   public void getStats(String sessionId, StatsCallback callback) {
     final PeerConnection pc;
-    final boolean parametersApplied;
+    final int parametersState;
     synchronized (lock) {
       if (peerConnection == null || mediaSessionId == null || !mediaSessionId.equals(sessionId)) {
         callback.onStats(null);
         return;
       }
       pc = peerConnection;
-      parametersApplied = bitrateParametersApplied;
+      parametersState = bitrateParametersState;
     }
     try {
       // Jitsi WebRTC 124 / org.webrtc: the current stats API is getStats(RTCStatsCollectorCallback).
@@ -415,7 +418,8 @@ public final class WebRtcEngine {
         @Override public void onStatsDelivered(org.webrtc.RTCStatsReport report) {
           try {
             Map<String, Object> sanitized = new HashMap<>();
-            sanitized.put("bitrateParametersApplied", parametersApplied);
+            if (parametersState == BITRATE_APPLIED) sanitized.put("bitrateParametersState", "applied");
+            else if (parametersState == BITRATE_FAILED) sanitized.put("bitrateParametersState", "failed");
             // Emit only sanitized numeric metrics, never full IP/SDP/candidate bodies.
             for (org.webrtc.RTCStats stat : report.getStatsMap().values()) {
               Map<String, Object> members = stat.getMembers();

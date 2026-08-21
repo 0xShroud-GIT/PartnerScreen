@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -19,6 +20,9 @@ class PartnerRequestNotificationModule : Module() {
     const val EXTRA_KIND = "partnerscreen_notification"
     const val EXTRA_SESSION_ID = "partnerscreen_sessionId"
     const val KIND_INCOMING_REQUEST = "incoming_request"
+    private const val INCOMING_REQUEST_SCHEME = "partnerscreen"
+    private const val INCOMING_REQUEST_HOST = "incoming-request"
+    private val SESSION_ID_RE = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", RegexOption.IGNORE_CASE)
   }
 
   override fun definition() = ModuleDefinition {
@@ -31,16 +35,15 @@ class PartnerRequestNotificationModule : Module() {
         return@AsyncFunction false
       }
       createChannel(context)
-      val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
+      val launchIntent = Intent(Intent.ACTION_VIEW, incomingRequestUri(sessionId)).apply {
         flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        setPackage(context.packageName)
         putExtra(EXTRA_KIND, KIND_INCOMING_REQUEST)
         putExtra(EXTRA_SESSION_ID, sessionId)
-      } ?: Intent().apply {
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
       }
       val pendingIntent = PendingIntent.getActivity(
         context,
-        0,
+        sessionId.hashCode(),
         launchIntent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
       )
@@ -81,6 +84,11 @@ class PartnerRequestNotificationModule : Module() {
       takeIncomingSessionId(activity.intent)
     }
 
+    OnNewIntent { intent ->
+      val sessionId = takeIncomingSessionId(intent) ?: return@OnNewIntent
+      sendEvent("onIncomingRequestOpened", mapOf("sessionId" to sessionId))
+    }
+
     OnActivityEntersForeground {
       val activity = appContext.currentActivity ?: return@OnActivityEntersForeground
       val sessionId = takeIncomingSessionId(activity.intent) ?: return@OnActivityEntersForeground
@@ -88,13 +96,32 @@ class PartnerRequestNotificationModule : Module() {
     }
   }
 
+  private fun incomingRequestUri(sessionId: String): Uri =
+    Uri.parse("$INCOMING_REQUEST_SCHEME://$INCOMING_REQUEST_HOST/$sessionId")
+
+  private fun parseIncomingRequestSessionId(raw: String?): String? {
+    if (raw.isNullOrBlank() || raw.length > 256) return null
+    val uri = Uri.parse(raw.trim())
+    if (!INCOMING_REQUEST_SCHEME.equals(uri.scheme, ignoreCase = true)) return null
+    if (!INCOMING_REQUEST_HOST.equals(uri.host, ignoreCase = true)) return null
+    val sessionId = uri.pathSegments.singleOrNull() ?: return null
+    if (!SESSION_ID_RE.matches(sessionId)) return null
+    return sessionId.lowercase()
+  }
+
   private fun takeIncomingSessionId(intent: Intent?): String? {
     if (intent == null) return null
-    val kind = intent.getStringExtra(EXTRA_KIND)
-    val sessionId = intent.getStringExtra(EXTRA_SESSION_ID)
-    if (kind != KIND_INCOMING_REQUEST || sessionId.isNullOrBlank()) return null
+    val extraKind = intent.getStringExtra(EXTRA_KIND)
+    val extraSessionId = intent.getStringExtra(EXTRA_SESSION_ID)
+    val fromExtra = if (extraKind == KIND_INCOMING_REQUEST && !extraSessionId.isNullOrBlank() && SESSION_ID_RE.matches(extraSessionId)) {
+      extraSessionId.lowercase()
+    } else {
+      null
+    }
+    val sessionId = fromExtra ?: parseIncomingRequestSessionId(intent.dataString) ?: return null
     intent.removeExtra(EXTRA_KIND)
     intent.removeExtra(EXTRA_SESSION_ID)
+    intent.data = null
     return sessionId
   }
 
