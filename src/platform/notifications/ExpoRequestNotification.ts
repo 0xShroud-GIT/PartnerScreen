@@ -1,11 +1,21 @@
+import { PermissionsAndroid, Platform } from 'react-native';
+
+export type IncomingRequestOpenEvent = { sessionId: string };
+
 export interface RequestNotificationPort {
   showRequestNotification(sessionId: string, partnerName: string): Promise<boolean>;
   clearRequestNotification(): Promise<boolean>;
+  ensurePermission(): Promise<boolean>;
+  consumeLaunchSessionId(): Promise<string | null>;
+  subscribeOpened(listener: (sessionId: string) => void): () => void;
 }
 
 type NativeModule = {
   showRequestNotification(sessionId: string, partnerName: string): Promise<boolean>;
   clearRequestNotification(): Promise<boolean>;
+  hasNotificationPermission(): boolean;
+  consumeLaunchSessionId(): Promise<string | null>;
+  addListener(eventName: 'onIncomingRequestOpened', listener: (event: IncomingRequestOpenEvent) => void): { remove(): void };
 };
 
 let cached: NativeModule | null = null;
@@ -22,6 +32,24 @@ function getNative(): NativeModule | null {
 }
 
 export class ExpoRequestNotification implements RequestNotificationPort {
+  private openedListeners = new Set<(sessionId: string) => void>();
+  private nativeSub: { remove(): void } | null = null;
+
+  constructor() {
+    const native = getNative();
+    if (native?.addListener) {
+      try {
+        this.nativeSub = native.addListener('onIncomingRequestOpened', (event) => {
+          if (typeof event?.sessionId === 'string' && event.sessionId.length > 0) {
+            for (const listener of this.openedListeners) listener(event.sessionId);
+          }
+        });
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   async showRequestNotification(sessionId: string, partnerName: string): Promise<boolean> {
     const native = getNative();
     if (!native) return false;
@@ -41,9 +69,42 @@ export class ExpoRequestNotification implements RequestNotificationPort {
       return false;
     }
   }
+
+  async ensurePermission(): Promise<boolean> {
+    if (Platform.OS !== 'android') return false;
+    const apiLevel = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
+    if (!Number.isFinite(apiLevel) || apiLevel < 33) return true;
+    const permission = PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS;
+    if (await PermissionsAndroid.check(permission)) return true;
+    return (await PermissionsAndroid.request(permission)) === PermissionsAndroid.RESULTS.GRANTED;
+  }
+
+  async consumeLaunchSessionId(): Promise<string | null> {
+    const native = getNative();
+    if (!native?.consumeLaunchSessionId) return null;
+    try {
+      const sessionId = await native.consumeLaunchSessionId();
+      return typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null;
+    } catch {
+      return null;
+    }
+  }
+
+  subscribeOpened(listener: (sessionId: string) => void): () => void {
+    this.openedListeners.add(listener);
+    return () => this.openedListeners.delete(listener);
+  }
+
+  dispose(): void {
+    this.nativeSub?.remove();
+    this.openedListeners.clear();
+  }
 }
 
 export class NoopRequestNotification implements RequestNotificationPort {
   async showRequestNotification(): Promise<boolean> { return false; }
   async clearRequestNotification(): Promise<boolean> { return false; }
+  async ensurePermission(): Promise<boolean> { return false; }
+  async consumeLaunchSessionId(): Promise<string | null> { return null; }
+  subscribeOpened(): () => void { return () => undefined; }
 }

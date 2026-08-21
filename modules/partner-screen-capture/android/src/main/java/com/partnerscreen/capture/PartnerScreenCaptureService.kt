@@ -40,6 +40,7 @@ class PartnerScreenCaptureService : Service() {
   private var captureStarting = false
   private var captureStarted = false
   private var captureSessionId: String? = null
+  private var pendingStart: Intent? = null
 
   override fun onCreate() {
     super.onCreate()
@@ -51,9 +52,31 @@ class PartnerScreenCaptureService : Service() {
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     when (intent?.action) {
       ACTION_STOP -> stopInternal("notification", emitRevoked = false)
-      ACTION_START -> startProjection(intent)
+      ACTION_START -> handleStartCommand(intent)
     }
     return START_NOT_STICKY
+  }
+
+  private fun handleStartCommand(intent: Intent) {
+    if (stopping) {
+      val queued = copyValidStartIntent(intent)
+      if (queued != null) pendingStart = queued
+      return
+    }
+    startProjection(intent)
+  }
+
+  private fun copyValidStartIntent(intent: Intent): Intent? {
+    val sessionId = intent.getStringExtra(EXTRA_SESSION_ID) ?: return null
+    if (sessionId.isBlank()) return null
+    val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, ACTIVITY_RESULT_MISSING)
+    val resultData = readResultData(intent) ?: return null
+    if (resultCode != android.app.Activity.RESULT_OK) return null
+    return Intent(ACTION_START).apply {
+      putExtra(EXTRA_SESSION_ID, sessionId)
+      putExtra(EXTRA_RESULT_CODE, resultCode)
+      putExtra(EXTRA_RESULT_DATA, Intent(resultData))
+    }
   }
 
   private fun startProjection(intent: Intent) {
@@ -65,6 +88,7 @@ class PartnerScreenCaptureService : Service() {
     }
     captureStarting = true
     captureSessionId = sessionId
+    CaptureBridge.stopRequest = { reason -> mainHandler.post { stopInternal(reason, emitRevoked = false) } }
     try {
       createNotificationChannel()
       startForegroundCompat(buildNotification("Preparing screen sharing…"))
@@ -148,6 +172,16 @@ class PartnerScreenCaptureService : Service() {
       mainHandler.post {
         if (emitRevoked && sessionId != null) CaptureBridge.emit("revoked", sessionId)
         else if (emitStopped && sessionId != null) CaptureBridge.emit("stopped", sessionId, reason = normalizeStopReason(reason))
+        val queued = pendingStart
+        pendingStart = null
+        if (queued != null) {
+          stopping = false
+          captureStarting = false
+          captureStarted = false
+          captureSessionId = null
+          startProjection(queued)
+          return@post
+        }
         try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
         stopSelf()
       }

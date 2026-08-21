@@ -1,9 +1,10 @@
 import type { DiagnosticEventKind } from '../domain/diagnostics/DiagnosticEvent';
-import type { SessionState } from '../session/SessionState';
+import { isBasePairedState, type SessionState } from '../session/SessionState';
 
 export interface NotificationPort {
   showRequestNotification(sessionId: string, partnerName: string): Promise<boolean>;
   clearRequestNotification(): Promise<boolean>;
+  ensurePermission(): Promise<boolean>;
 }
 
 export interface NotifierDiagnostics {
@@ -17,6 +18,9 @@ export interface SessionSource {
 
 export class IncomingRequestNotifier {
   private activeSessionId: string | null = null;
+  private desiredGeneration = 0;
+  private permissionAsked = false;
+  private operationQueue: Promise<void> = Promise.resolve();
   private readonly unsubscribe: () => void;
 
   constructor(
@@ -25,43 +29,92 @@ export class IncomingRequestNotifier {
     private readonly diagnostics: NotifierDiagnostics,
   ) {
     this.unsubscribe = this.session.subscribe(() => {
-      void this.sync();
+      const generation = this.bumpGeneration();
+      void this.enqueue(() => this.sync(generation));
     });
-    void this.sync();
+    const generation = this.bumpGeneration();
+    void this.enqueue(() => this.sync(generation));
+  }
+
+  getActiveSessionId(): string | null {
+    return this.activeSessionId;
   }
 
   dispose(): void {
     this.unsubscribe();
+    this.bumpGeneration();
     if (this.activeSessionId) {
       void this.notifications.clearRequestNotification().catch(() => undefined);
       this.activeSessionId = null;
     }
   }
 
-  private async sync(): Promise<void> {
+  private bumpGeneration(): number {
+    this.desiredGeneration += 1;
+    return this.desiredGeneration;
+  }
+
+  private isCurrent(generation: number): boolean {
+    return generation === this.desiredGeneration;
+  }
+
+  private async sync(generation: number): Promise<void> {
+    if (!this.isCurrent(generation)) return;
     const state = this.session.getSnapshot();
+
+    if ((isBasePairedState(state) || state.type === 'IncomingRequest') && !this.permissionAsked) {
+      this.permissionAsked = true;
+      await this.notifications.ensurePermission().catch(() => false);
+      if (!this.isCurrent(generation)) return;
+    }
+
     if (state.type === 'IncomingRequest') {
       if (this.activeSessionId === state.sessionId) return;
-      this.activeSessionId = state.sessionId;
-      try {
-        const shown = await this.notifications.showRequestNotification(state.sessionId, state.pair.partnerDeviceName);
-        if (shown) await this.diagnostics.append('notification_shown').catch(() => undefined);
-      } catch {
-        // Notification failure must not fail the session; remain visible in-app.
+      const sessionId = state.sessionId;
+      const partnerName = state.pair.partnerDeviceName;
+      await this.notifications.ensurePermission().catch(() => false);
+      if (!this.isCurrent(generation)) return;
+      const shown = await this.notifications.showRequestNotification(sessionId, partnerName).catch(() => false);
+      if (!this.isCurrent(generation)) {
+        // Stale completed show cannot remain on the device while a newer generation is queued.
+        await this.clearNativeNotification();
+        return;
       }
+      const latest = this.session.getSnapshot();
+      if (latest.type !== 'IncomingRequest' || latest.sessionId !== sessionId) {
+        await this.clearNativeNotification();
+        return;
+      }
+      if (!shown) {
+        await this.clearNativeNotification();
+        return;
+      }
+      this.activeSessionId = sessionId;
+      await this.diagnostics.append('notification_shown').catch(() => undefined);
       return;
     }
+
     if (this.activeSessionId) {
-      const previous = this.activeSessionId;
-      this.activeSessionId = null;
-      try {
-        await this.notifications.clearRequestNotification();
-        await this.diagnostics.append('notification_cleared').catch(() => undefined);
-      } catch {
-        // best effort
+      await this.notifications.clearRequestNotification().catch(() => undefined);
+      if (!this.isCurrent(generation)) {
+        await this.clearNativeNotification();
+        return;
       }
-      // Also handle case where we were showing for `previous` but state moved to other type
-      void previous;
+      const latest = this.session.getSnapshot();
+      if (latest.type === 'IncomingRequest') return;
+      this.activeSessionId = null;
+      await this.diagnostics.append('notification_cleared').catch(() => undefined);
     }
+  }
+
+  private async clearNativeNotification(): Promise<void> {
+    await this.notifications.clearRequestNotification().catch(() => undefined);
+    this.activeSessionId = null;
+  }
+
+  private enqueue(operation: () => Promise<void>): Promise<void> {
+    const result = this.operationQueue.then(operation);
+    this.operationQueue = result.then(() => undefined, () => undefined);
+    return result;
   }
 }

@@ -118,12 +118,14 @@ test('clear/recover path does not remove pairing and availability offline return
   await c2.mediaFailed(snap1.sessionId);
   await settle();
   assert.equal(c2.getSnapshot().type, 'Error');
-  // Switch availability to offline before recover
+  // Availability may refresh cached reachability but must never clear Error.
   c2.updateAvailability({ kind: 'offline', pair, localAdvertised: true });
   await settle();
-  // Because updateAvailability now handles Error, it should have moved to offline
+  assert.equal(c2.getSnapshot().type, 'Error');
+  assert.equal((c2.getSnapshot() as { pair: PairTrustMetadata }).pair.pairId, pair.pairId);
+  await c2.clearError();
+  await settle();
   assert.equal(c2.getSnapshot().type, 'PairedOffline');
-  // Ensure pairing still exists
   assert.equal((c2.getSnapshot() as { pair: PairTrustMetadata }).pair.pairId, pair.pairId);
   c2.dispose();
   controller.dispose();
@@ -145,12 +147,15 @@ test('availability update while in Error returns to accurate offline/available w
   await controller.mediaFailed(sid);
   await settle();
   assert.equal(controller.getSnapshot().type, 'Error');
-  // Partner goes offline
+  // Partner goes offline — Error must remain until explicit recovery.
   controller.updateAvailability({ kind: 'offline', pair, localAdvertised: true });
   await settle();
-  assert.equal(controller.getSnapshot().type, 'PairedOffline');
-  // Partner comes back available
+  assert.equal(controller.getSnapshot().type, 'Error');
+  // Partner comes back available — still Error; cached availability is updated only.
   controller.updateAvailability({ kind: 'available', pair, endpoint: { host: '192.168.1.11', port: 45001 }, serviceName: 'peer' });
+  await settle();
+  assert.equal(controller.getSnapshot().type, 'Error');
+  await controller.clearError();
   await settle();
   assert.equal(controller.getSnapshot().type, 'PairedAvailable');
   // Can request again without restart
@@ -166,6 +171,7 @@ test('incoming request notification is shown and cleared on state transitions', 
   const fakeNotifications = {
     async showRequestNotification(sessionId: string, partnerName: string): Promise<boolean> { shown.push({ sessionId, partnerName }); return true; },
     async clearRequestNotification(): Promise<boolean> { cleared += 1; return true; },
+    async ensurePermission(): Promise<boolean> { return true; },
   };
   const fakeSessionState: { value: SessionState } = { value: { type: 'PairedOffline', pair } };
   const listeners = new Set<() => void>();
@@ -213,6 +219,7 @@ test('notification cleared on timeout/decline and not shown for non-incoming sta
   const fakeNotifications = {
     async showRequestNotification(sessionId: string): Promise<boolean> { shown.push(sessionId); return true; },
     async clearRequestNotification(): Promise<boolean> { clearedLog.push(1); return true; },
+    async ensurePermission(): Promise<boolean> { return true; },
   };
   const fakeSessionState: { value: SessionState } = { value: { type: 'PairedAvailable', pair, endpoint: { host: '192.168.1.11', port: 45001 } } };
   const listeners = new Set<() => void>();
@@ -293,6 +300,7 @@ class FakeNative implements WebRtcMediaPort {
   async acceptAnswer(): Promise<void> {}
   async addIceCandidate(): Promise<void> {}
   async close(id: string): Promise<void> { this.closed.push(id); }
+  async getStats(): Promise<null> { return null; }
   emit(event: WebRtcMediaNativeEvent): void { for (const l of this.listeners) l(event); }
 }
 class FakeSessionAuthority implements MediaSessionAuthority {

@@ -1,6 +1,6 @@
 export interface KeepAwakePort {
-  enable(): Promise<void>;
-  disable(): Promise<void>;
+  enable(): Promise<boolean>;
+  disable(): Promise<boolean>;
 }
 
 type NativeModule = {
@@ -22,19 +22,19 @@ function getNative(): NativeModule | null {
 }
 
 export class ExpoKeepAwake implements KeepAwakePort {
-  async enable(): Promise<void> {
+  async enable(): Promise<boolean> {
     const native = getNative();
-    if (!native) return;
-    try { await native.enable(); } catch { /* best effort */ }
+    if (!native) return false;
+    try { return await native.enable(); } catch { return false; }
   }
-  async disable(): Promise<void> {
+  async disable(): Promise<boolean> {
     const native = getNative();
-    if (!native) return;
-    try { await native.disable(); } catch { /* best effort */ }
+    if (!native) return false;
+    try { return await native.disable(); } catch { return false; }
   }
 }
 
 export class NoopKeepAwake implements KeepAwakePort {
-  async enable(): Promise<void> {}
-  async disable(): Promise<void> {}
+  async enable(): Promise<boolean> { return false; }
+  async disable(): Promise<boolean> { return false; }
 }

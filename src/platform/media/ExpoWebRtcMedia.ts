@@ -2,6 +2,7 @@ import PartnerScreenCaptureModule from '../../../modules/partner-screen-capture'
 import type { PartnerScreenMediaEvent } from '../../../modules/partner-screen-capture';
 import { UUID_V4_RE } from '../../protocol/ControlMessage';
 import { isSafePrivateHostCandidate, isSafeVideoSdp } from '../../protocol/MediaValidation';
+import { sanitizeMediaStats, type SanitizedMediaStats } from '../../media/MediaStats';
 import type { MediaConnectionState, WebRtcMediaNativeEvent, WebRtcMediaPort } from '../../media/WebRtcMediaPort';
 
 const NATIVE_MEDIA_OPERATION_TIMEOUT_MS = 10_000;
@@ -80,6 +81,16 @@ export class ExpoWebRtcMedia implements WebRtcMediaPort {
   async close(sessionId: string): Promise<void> {
     if (!validSession(sessionId)) return;
     await withTimeout(PartnerScreenCaptureModule.closeMedia(sessionId), NATIVE_MEDIA_CLOSE_TIMEOUT_MS, 'Media close timed out.').catch(() => undefined);
+  }
+
+  async getStats(sessionId: string): Promise<SanitizedMediaStats | null> {
+    if (!validSession(sessionId)) return null;
+    try {
+      const raw = await withTimeout(PartnerScreenCaptureModule.getMediaStats(sessionId), NATIVE_MEDIA_OPERATION_TIMEOUT_MS, 'Media stats timed out.');
+      return sanitizeMediaStats(raw);
+    } catch {
+      return null;
+    }
   }
 
   dispose(): void { this.subscription.remove(); this.listeners.clear(); }

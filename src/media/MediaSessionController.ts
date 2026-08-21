@@ -2,11 +2,15 @@ import type { ScreenCaptureState } from '../capture/ScreenCaptureCoordinator';
 import type { DiagnosticEventKind } from '../domain/diagnostics/DiagnosticEvent';
 import type { AnyMediaControlMessage, ControlPayloadMap, MediaControlMessageType } from '../protocol/ControlMessage';
 import type { SessionState } from '../session/SessionState';
+import { measuredBitrateBps, qualityFromStats, sanitizeMediaStats, type SanitizedMediaStats } from './MediaStats';
 import type { WebRtcMediaNativeEvent, WebRtcMediaPort } from './WebRtcMediaPort';
 
 export const MEDIA_RECONNECT_MAX_ATTEMPTS = 3;
 export const MEDIA_RECONNECT_DELAYS_MS = [750, 1_500, 3_000] as const;
 export const MEDIA_RECONNECT_FRAME_GRACE_MS = 5_000;
+export const MEDIA_INITIAL_USABLE_VIDEO_DEADLINE_MS = 15_000;
+export const MEDIA_RECONNECT_ATTEMPT_TIMEOUT_MS = 8_000;
+export const MEDIA_STATS_POLL_INTERVAL_MS = 2_000;
 
 export type MediaQuality = 'unknown' | 'good' | 'degraded' | 'reconnecting';
 export type MediaSessionState =
@@ -49,8 +53,14 @@ export class MediaSessionController {
   private readonly unsubscribeCapture: () => void;
   private operationQueue: Promise<void> = Promise.resolve();
   private recoveryTimer: RecoveryTimer | null = null;
+  private initialDeadlineTimer: RecoveryTimer | null = null;
+  private statsTimer: RecoveryTimer | null = null;
   private recoveryAttempt = 0;
   private remoteTrackEpoch = 0;
+  private stats: SanitizedMediaStats | null = null;
+  private liveHealth: 'good' | 'degraded' = 'good';
+  private previousBytesSent: { bytesSent: number; atMs: number } | null = null;
+  private previousPacketsLost: number | undefined;
 
   constructor(
     private readonly native: WebRtcMediaPort,
@@ -58,6 +68,7 @@ export class MediaSessionController {
     private readonly capture: CaptureStateSource,
     private readonly diagnostics: MediaDiagnostics,
     private readonly scheduler: MediaRecoveryScheduler = defaultScheduler,
+    private readonly nowMs: () => number = () => Date.now(),
   ) {
     this.unsubscribeNative = native.subscribe((event) => { void this.enqueue(() => this.handleNative(event)).catch(() => undefined); });
     this.unsubscribeSession = session.subscribe(() => { void this.enqueue(() => this.syncAuthority()).catch(() => undefined); });
@@ -67,15 +78,27 @@ export class MediaSessionController {
   }
 
   getSnapshot = (): MediaSessionState => this.state;
+  getStatsSnapshot = (): SanitizedMediaStats | null => this.stats;
+  getLiveHealth = (): 'good' | 'degraded' => this.liveHealth;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   reconcile(): Promise<void> { return this.enqueue(() => this.syncAuthority()); }
   clearError(): Promise<void> { return this.enqueue(async () => {
     if (this.state.type !== 'error') return;
     this.clearRecovery(true);
+    this.clearDeadlines();
+    this.clearStats();
     // After a failed media session, return to idle so a replacement session can start clean.
     // syncAuthority will also converge to idle when the product session is not Connected; this covers the
     // manual retry path where the SessionController has already returned to Paired*.
     this.setState({ type: 'idle' });
+  }); }
+  resetToIdle(): Promise<void> { return this.enqueue(async () => {
+    const active = this.activeSessionId();
+    this.clearRecovery(true);
+    this.clearDeadlines();
+    this.clearStats();
+    if (active) await this.native.close(active).catch(() => undefined);
+    if (this.state.type !== 'idle') this.setState({ type: 'idle' });
   }); }
 
   rendererFirstFrame(sessionId: string, rendererEpoch: number): Promise<void> { return this.enqueue(async () => {
@@ -84,7 +107,10 @@ export class MediaSessionController {
     const recovered = this.recoveryAttempt > 0;
     const trackEpoch = this.state.trackEpoch;
     this.clearRecovery(true);
+    this.clearDeadlines();
+    this.liveHealth = 'good';
     this.setState({ type: 'live', sessionId, quality: 'good', trackEpoch });
+    this.scheduleStats(sessionId);
     await this.record('media_first_frame');
     if (recovered) await this.record('media_reconnected');
   }); }
@@ -92,7 +118,7 @@ export class MediaSessionController {
   dispose(): void {
     const active = this.activeSessionId();
     this.unsubscribeNative(); this.unsubscribeSession(); this.unsubscribeMedia(); this.unsubscribeCapture();
-    this.clearRecovery(true); this.listeners.clear();
+    this.clearRecovery(true); this.clearDeadlines(); this.clearStats(); this.listeners.clear();
     if (active) void this.native.close(active).catch(() => undefined);
   }
 
@@ -107,6 +133,8 @@ export class MediaSessionController {
     if (session.type !== 'Connected') {
       const active = this.activeSessionId();
       this.clearRecovery(true);
+      this.clearDeadlines();
+      this.clearStats();
       if (active) await this.native.close(active).catch(() => undefined);
       if (this.state.type !== 'idle') this.setState({ type: 'idle' });
       return;
@@ -115,9 +143,10 @@ export class MediaSessionController {
     if (session.role === 'requester') {
       const sessionId = session.sessionId;
       const active = this.activeSessionId();
-      if (active && active !== sessionId) { this.clearRecovery(true); await this.native.close(active).catch(() => undefined); }
+      if (active && active !== sessionId) { this.clearRecovery(true); this.clearDeadlines(); this.clearStats(); await this.native.close(active).catch(() => undefined); }
       if (active !== sessionId) {
         this.setState({ type: 'negotiating', sessionId, role: 'requester', quality: 'unknown' });
+        this.scheduleInitialDeadline(sessionId);
         try {
           await this.native.prepareRequester(sessionId);
           if (!this.isCurrentSession(sessionId)) return;
@@ -132,8 +161,9 @@ export class MediaSessionController {
     const sessionId = session.sessionId;
     const active = this.activeSessionId();
     if (active === sessionId) return;
-    if (active) { this.clearRecovery(true); await this.native.close(active).catch(() => undefined); }
+    if (active) { this.clearRecovery(true); this.clearDeadlines(); this.clearStats(); await this.native.close(active).catch(() => undefined); }
     this.setState({ type: 'negotiating', sessionId, role: 'sharer', quality: 'unknown' });
+    this.scheduleInitialDeadline(sessionId);
     try {
       const offer = await this.native.createPublisherOffer(sessionId);
       // Delayed offer from a replaced session must never be signaled over the fresh channel.
@@ -165,6 +195,7 @@ export class MediaSessionController {
           if (!this.isCurrentSession(sessionId)) return;
           if (this.recoveryAttempt === 0) this.recoveryAttempt = 1;
           this.setState({ type: 'reconnecting', sessionId, role: 'requester', attempt: this.recoveryAttempt, quality: 'reconnecting' });
+          this.scheduleAttemptWatchdog(sessionId);
         }
         const answer = await this.native.acceptOffer(sessionId, message.payload.sdp);
         // Delayed answer from a replaced session must never be sent over the fresh channel.
@@ -205,11 +236,15 @@ export class MediaSessionController {
       const recovering = this.recoveryAttempt > 0;
       this.clearRecovery(false);
       if (this.state.type === 'publishing' && this.state.sessionId === event.sessionId) {
+        this.clearDeadlines();
         this.setState({ type: 'publishing', sessionId: event.sessionId, quality: 'good' });
+        this.scheduleStats(event.sessionId);
         if (recovering) { this.recoveryAttempt = 0; await this.record('media_reconnected'); }
       } else if (this.state.type === 'reconnecting' && this.state.sessionId === event.sessionId && this.state.role === 'sharer') {
+        this.clearDeadlines();
         this.setState({ type: 'publishing', sessionId: event.sessionId, quality: 'good' });
         this.recoveryAttempt = 0;
+        this.scheduleStats(event.sessionId);
         await this.record('media_reconnected');
       } else if (this.state.type === 'remote_track_attached' && this.state.sessionId === event.sessionId) {
         this.setState({ type: 'remote_track_attached', sessionId: event.sessionId, quality: 'good', trackEpoch: this.state.trackEpoch });
@@ -238,6 +273,8 @@ export class MediaSessionController {
     if (session.type !== 'Connected' || session.sessionId !== sessionId) return;
     if (this.recoveryTimer) return;
     if (this.recoveryAttempt >= MEDIA_RECONNECT_MAX_ATTEMPTS) { await this.failMedia(sessionId, 'The private video connection could not recover.'); return; }
+    this.clearStats();
+    this.clearInitialDeadline();
     this.recoveryAttempt += 1;
     this.setState({ type: 'reconnecting', sessionId, role: session.role, attempt: this.recoveryAttempt, quality: 'reconnecting' });
     if (this.recoveryAttempt === 1) await this.record('media_degraded');
@@ -268,6 +305,7 @@ export class MediaSessionController {
       const offer = await this.native.createPublisherOffer(sessionId);
       if (!this.isCurrentSession(sessionId)) return;
       await this.session.sendMedia(sessionId, 'SDP_OFFER', { sdp: offer });
+      this.scheduleAttemptWatchdog(sessionId);
     } catch {
       await this.beginRecovery(sessionId, false);
     }
@@ -287,11 +325,85 @@ export class MediaSessionController {
     });
   }
 
+  private scheduleInitialDeadline(sessionId: string): void {
+    this.clearInitialDeadline();
+    this.initialDeadlineTimer = this.scheduler.schedule(MEDIA_INITIAL_USABLE_VIDEO_DEADLINE_MS, () => {
+      this.initialDeadlineTimer = null;
+      void this.enqueue(async () => {
+        if (!this.isCurrentSession(sessionId)) return;
+        if (this.state.type === 'live' && this.state.sessionId === sessionId) return;
+        if (this.state.type === 'publishing' && this.state.sessionId === sessionId && this.state.quality === 'good') return;
+        if (this.state.type === 'reconnecting') return;
+        await this.failMedia(sessionId, 'PartnerScreen could not get usable video in time.');
+      }).catch(() => undefined);
+    });
+  }
+
+  private scheduleAttemptWatchdog(sessionId: string): void {
+    if (this.recoveryTimer) return;
+    this.recoveryTimer = this.scheduler.schedule(MEDIA_RECONNECT_ATTEMPT_TIMEOUT_MS, () => {
+      this.recoveryTimer = null;
+      void this.enqueue(async () => {
+        if (this.recoveryAttempt === 0) return;
+        if (!this.isCurrentSession(sessionId)) return;
+        if (this.state.type === 'live' && this.state.sessionId === sessionId) return;
+        if (this.state.type === 'publishing' && this.state.sessionId === sessionId && this.state.quality === 'good') return;
+        await this.beginRecovery(sessionId, false);
+      }).catch(() => undefined);
+    });
+  }
+
+  private scheduleStats(sessionId: string): void {
+    this.clearStatsTimer();
+    this.statsTimer = this.scheduler.schedule(MEDIA_STATS_POLL_INTERVAL_MS, () => {
+      this.statsTimer = null;
+      void this.enqueue(() => this.pullStats(sessionId)).catch(() => undefined);
+    });
+  }
+
+  private async pullStats(sessionId: string): Promise<void> {
+    if (!this.isCurrentSession(sessionId)) return;
+    if (this.state.type !== 'live' && this.state.type !== 'publishing' && this.state.type !== 'remote_track_attached') return;
+    if (this.state.sessionId !== sessionId) return;
+    const raw = await this.native.getStats(sessionId).catch(() => null);
+    const sanitized = sanitizeMediaStats(raw);
+    if (sanitized && typeof sanitized.bytesSent === 'number') {
+      const measured = measuredBitrateBps(this.previousBytesSent, sanitized.bytesSent, this.nowMs());
+      this.previousBytesSent = { bytesSent: sanitized.bytesSent, atMs: this.nowMs() };
+      if (measured !== undefined) sanitized.measuredBitrateBps = measured;
+    }
+    this.stats = sanitized;
+    const nextHealth = qualityFromStats(sanitized, this.previousPacketsLost);
+    if (typeof sanitized?.packetsLost === 'number') this.previousPacketsLost = sanitized.packetsLost;
+    if (this.state.type === 'live') {
+      if (nextHealth === 'degraded' && this.liveHealth !== 'degraded') {
+        this.liveHealth = 'degraded';
+        await this.record('media_degraded');
+      } else if (nextHealth === 'good') {
+        this.liveHealth = 'good';
+      }
+    } else if ((this.state.type === 'publishing' || this.state.type === 'remote_track_attached') && this.state.sessionId === sessionId) {
+      if (nextHealth === 'degraded' && this.state.quality !== 'degraded') {
+        this.setState({ ...this.state, quality: 'degraded' });
+        await this.record('media_degraded');
+      } else if (nextHealth === 'good' && this.state.quality === 'degraded') {
+        this.setState({ ...this.state, quality: 'good' });
+      }
+    }
+    if (sanitized) await this.record('media_stats');
+    for (const listener of this.listeners) listener();
+    if (this.isCurrentSession(sessionId) && (this.state.type === 'live' || this.state.type === 'publishing' || this.state.type === 'remote_track_attached')) {
+      this.scheduleStats(sessionId);
+    }
+  }
+
   private async failMedia(expectedSessionId: string, message: string): Promise<void> {
     // A delayed failure from a replaced/terminal session must never terminate the fresh session.
     if (!this.isCurrentSession(expectedSessionId)) return;
     const active = this.activeSessionId();
     this.clearRecovery(true);
+    this.clearDeadlines();
+    this.clearStats();
     if (active) await this.native.close(active).catch(() => undefined);
     this.setState({ type: 'error', message });
     await this.record('media_failed');
@@ -299,6 +411,10 @@ export class MediaSessionController {
   }
   private activeSessionId(): string | null { return this.state.type === 'negotiating' || this.state.type === 'publishing' || this.state.type === 'remote_track_attached' || this.state.type === 'live' || this.state.type === 'reconnecting' ? this.state.sessionId : null; }
   private clearRecovery(resetAttempt: boolean): void { this.recoveryTimer?.cancel(); this.recoveryTimer = null; if (resetAttempt) this.recoveryAttempt = 0; }
+  private clearInitialDeadline(): void { this.initialDeadlineTimer?.cancel(); this.initialDeadlineTimer = null; }
+  private clearStatsTimer(): void { this.statsTimer?.cancel(); this.statsTimer = null; }
+  private clearDeadlines(): void { this.clearInitialDeadline(); this.clearStatsTimer(); }
+  private clearStats(): void { this.clearStatsTimer(); this.stats = null; this.liveHealth = 'good'; this.previousBytesSent = null; this.previousPacketsLost = undefined; }
   private record(kind: DiagnosticEventKind): Promise<void> { return this.diagnostics.append(kind).catch(() => undefined); }
   private setState(next: MediaSessionState): void { this.state = next; for (const listener of this.listeners) listener(); }
   private enqueue(operation: () => Promise<void>): Promise<void> { const result = this.operationQueue.then(operation); this.operationQueue = result.then(() => undefined, () => undefined); return result; }

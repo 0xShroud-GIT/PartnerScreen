@@ -3,7 +3,8 @@
   "compilerOptions": { "noEmit": true, "types": ["node"] },
   "include": [
     "tests/screen-capture-coordinator.test.ts",
-    "tests/capture-control.test.ts"
+    "tests/capture-control.test.ts",
+    "tests/capture-stop-start.test.ts"
   ],
   "exclude": []
 }

@@ -62,7 +62,12 @@ export class ExpoScreenCapture implements ScreenCapturePort {
     if (!validSession(sessionId)) throw new Error('PartnerScreen could not start screen capture.');
     try { await PartnerScreenCaptureModule.startCapture(sessionId); } catch { throw new Error('PartnerScreen could not start screen capture.'); }
   }
-  async stop(): Promise<void> { try { await PartnerScreenCaptureModule.stopCapture(); } catch { throw new Error('PartnerScreen could not stop screen capture cleanly.'); } }
+  async stop(): Promise<void> {
+    try {
+      const stopped = await PartnerScreenCaptureModule.stopCapture();
+      if (stopped === false) throw new Error('PartnerScreen could not stop screen capture cleanly.');
+    } catch { throw new Error('PartnerScreen could not stop screen capture cleanly.'); }
+  }
   getNativeState(): 'idle' | 'starting' | 'capturing' { const value = PartnerScreenCaptureModule.getState(); return SAFE_NATIVE_STATES.has(value) ? value as 'idle' | 'starting' | 'capturing' : 'idle'; }
   dispose(): void { this.nativeSubscription.remove(); this.listeners.clear(); }
 }

@@ -147,6 +147,23 @@ test('Stop sharing with a Connected sharer and no active native capture still en
   coordinator.dispose();
 });
 
+test('Stop then immediate Start for a new session stops leftover capture and starts the new request', async () => {
+  const { port, session, coordinator } = harness();
+  await coordinator.requestForConnectedSharer(); port.emit({ type: 'started', sessionId }); await settle();
+  assert.equal(coordinator.getSnapshot().type, 'capturing');
+  const replacementSessionId = '88888888-8888-4888-8888-888888888888';
+  session.setState({ type: 'Connected', pair, sessionId: replacementSessionId, role: 'sharer' });
+  await coordinator.requestForConnectedSharer(); await settle();
+  assert.ok(port.stops >= 1);
+  assert.equal(port.starts, 2);
+  const starting = coordinator.getSnapshot();
+  assert.equal(starting.type, 'starting');
+  if (starting.type === 'starting') assert.equal(starting.sessionId, replacementSessionId);
+  port.emit({ type: 'started', sessionId: replacementSessionId }); await settle();
+  assert.equal(coordinator.getSnapshot().type, 'capturing');
+  coordinator.dispose();
+});
+
 test('a delayed stopped event from capture A cannot end replacement session B (endSession is session-scoped)', async () => {
   const { port, session, coordinator } = harness();
   await coordinator.requestForConnectedSharer(); port.emit({ type: 'started', sessionId }); await settle();
