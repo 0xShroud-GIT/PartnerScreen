@@ -4,6 +4,8 @@ import type { PartnerScreenCaptureModuleEvents } from './PartnerScreenCapture.ty
 declare class PartnerScreenCaptureModule extends NativeModule<PartnerScreenCaptureModuleEvents> {
   requestConsent(): Promise<boolean>;
   startCapture(sessionId: string): Promise<boolean>;
+  /** Runtime Laboratory only. Native Android also requires a debuggable application. */
+  startSyntheticCaptureForTest(sessionId: string): Promise<boolean>;
   stopCapture(): Promise<boolean>;
   getState(): string;
   prepareRequesterMedia(sessionId: string): Promise<boolean>;
