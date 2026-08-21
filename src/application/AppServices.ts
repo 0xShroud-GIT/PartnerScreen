@@ -74,6 +74,7 @@ try {
 }
 
 let pairedLifecycle: Promise<void> = Promise.resolve();
+let notificationPromptedAfterPair = false;
 pairingService.subscribe(() => {
   pairedLifecycle = pairedLifecycle.then(async () => {
     const state = pairingService.getSnapshot();
@@ -81,6 +82,10 @@ pairingService.subscribe(() => {
       await sessionController.activatePair(state.pair);
       await availabilityService.activate(state.pair);
       sessionController.updateAvailability(availabilityService.getSnapshot());
+      if (!notificationPromptedAfterPair) {
+        notificationPromptedAfterPair = true;
+        await requestNotificationPort.requestPermissionFromForeground().catch(() => 'unknown');
+      }
     } else if (state.kind === 'unpaired') {
       await availabilityService.deactivate();
       await sessionController.deactivatePair();

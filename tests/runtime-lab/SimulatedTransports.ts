@@ -69,8 +69,17 @@ export class SimulatedControlTransport implements ControlTransport {
   endpoint: ControlListenerEndpoint | null = null;
   startCount = 0;
   stopCount = 0;
+  private trustedPresenceActive = false;
 
   constructor(readonly host: string, readonly fabric: SimulatedControlFabric) {}
+
+  async startTrustedPresence(): Promise<void> {
+    this.trustedPresenceActive = true;
+  }
+
+  async stopTrustedPresence(): Promise<void> {
+    this.trustedPresenceActive = false;
+  }
 
   async startListener(): Promise<ControlListenerEndpoint> {
     this.startCount += 1;
@@ -131,6 +140,13 @@ export class SimulatedControlTransport implements ControlTransport {
   }
 
   killProcess(): void {
+    // P0-D: trusted presence owns the listener in the native service, not the JS/UI process.
+    // When the UI process dies, the native connectedDevice FGS keeps the listener alive.
+    // In the lab, if trusted presence is active, the endpoint and JS callbacks survive the
+    // process kill so a paired partner can still reach the device and the IncomingRequest
+    // is delivered to the existing ControlSession. Without trusted presence, the listener
+    // is process-bound and dies with the process.
+    if (this.trustedPresenceActive) return;
     const endpoint = this.endpoint;
     if (endpoint) this.fabric.release(endpoint);
     this.endpoint = null;

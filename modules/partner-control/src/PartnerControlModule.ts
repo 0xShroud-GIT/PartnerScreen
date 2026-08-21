@@ -7,6 +7,9 @@ declare class PartnerControlModule extends NativeModule<PartnerControlModuleEven
   connect(host: string, port: number): Promise<string>;
   send(connectionId: string, frame: string): Promise<void>;
   close(connectionId: string): Promise<void>;
+  startTrustedPresence(): Promise<boolean>;
+  stopTrustedPresence(): Promise<boolean>;
+  getActiveListener(): ControlListenerEndpoint | null;
 }
 
 export default requireNativeModule<PartnerControlModule>('PartnerControl');
