@@ -4,10 +4,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -26,7 +24,7 @@ class PartnerRequestNotificationModule : Module() {
 
     AsyncFunction("showRequestNotification") { sessionId: String, partnerName: String ->
       val context = appContext.reactContext ?: return@AsyncFunction false
-      if (!hasNotificationPermission(context)) {
+      if (!NotificationPermissionPolicy.isGranted(context)) {
         return@AsyncFunction false
       }
       createChannel(context)
@@ -70,7 +68,7 @@ class PartnerRequestNotificationModule : Module() {
 
     Function("hasNotificationPermission") {
       val context = appContext.reactContext ?: return@Function false
-      hasNotificationPermission(context)
+      NotificationPermissionPolicy.isGranted(context)
     }
 
     AsyncFunction("consumeLaunchSessionId") {
@@ -88,11 +86,6 @@ class PartnerRequestNotificationModule : Module() {
       val sessionId = IncomingRequestIntentCodec.take(activity.intent) ?: return@OnActivityEntersForeground
       sendEvent("onIncomingRequestOpened", mapOf("sessionId" to sessionId))
     }
-  }
-
-  private fun hasNotificationPermission(context: Context): Boolean {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
-    return ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
   }
 
   private fun createChannel(context: Context) {
