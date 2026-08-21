@@ -36,11 +36,11 @@ class PartnerScreenCaptureService : Service() {
 
   private val mainHandler = Handler(Looper.getMainLooper())
   private val engineExecutor = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "PartnerScreenCaptureEngine") }
+  private val pendingStarts = PendingCaptureStartQueue()
   private var stopping = false
   private var captureStarting = false
   private var captureStarted = false
   private var captureSessionId: String? = null
-  private var pendingStart: Intent? = null
 
   override fun onCreate() {
     super.onCreate()
@@ -59,24 +59,10 @@ class PartnerScreenCaptureService : Service() {
 
   private fun handleStartCommand(intent: Intent) {
     if (stopping) {
-      val queued = copyValidStartIntent(intent)
-      if (queued != null) pendingStart = queued
+      pendingStarts.offer(intent)
       return
     }
     startProjection(intent)
-  }
-
-  private fun copyValidStartIntent(intent: Intent): Intent? {
-    val sessionId = intent.getStringExtra(EXTRA_SESSION_ID) ?: return null
-    if (sessionId.isBlank()) return null
-    val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, ACTIVITY_RESULT_MISSING)
-    val resultData = readResultData(intent) ?: return null
-    if (resultCode != android.app.Activity.RESULT_OK) return null
-    return Intent(ACTION_START).apply {
-      putExtra(EXTRA_SESSION_ID, sessionId)
-      putExtra(EXTRA_RESULT_CODE, resultCode)
-      putExtra(EXTRA_RESULT_DATA, Intent(resultData))
-    }
   }
 
   private fun startProjection(intent: Intent) {
@@ -172,8 +158,7 @@ class PartnerScreenCaptureService : Service() {
       mainHandler.post {
         if (emitRevoked && sessionId != null) CaptureBridge.emit("revoked", sessionId)
         else if (emitStopped && sessionId != null) CaptureBridge.emit("stopped", sessionId, reason = normalizeStopReason(reason))
-        val queued = pendingStart
-        pendingStart = null
+        val queued = pendingStarts.take()
         if (queued != null) {
           stopping = false
           captureStarting = false
@@ -190,6 +175,7 @@ class PartnerScreenCaptureService : Service() {
 
   override fun onDestroy() {
     if (!stopping && (captureStarting || captureStarted)) stopInternal("service_destroyed", emitRevoked = false)
+    pendingStarts.clear()
     CaptureBridge.stopRequest = null
     engineExecutor.shutdown()
     super.onDestroy()
