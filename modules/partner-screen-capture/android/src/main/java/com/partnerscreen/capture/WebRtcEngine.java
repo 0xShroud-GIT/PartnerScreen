@@ -193,6 +193,80 @@ public final class WebRtcEngine {
     }
   }
 
+  /**
+   * Runtime Laboratory capture source. This is deliberately a separate entry point so the
+   * MediaProjection path above is not refactored merely to make tests convenient. Native code
+   * rejects it unless the installed application is debuggable.
+   */
+  public void startSyntheticCaptureForTest(Context context, int width, int height, int fps, CaptureListener listener) throws Exception {
+    if (!RuntimeLabGate.INSTANCE.isDebuggable(context)) {
+      throw new SecurityException("Synthetic Runtime Lab capture requires a debuggable application.");
+    }
+    ensureInitialized(context);
+    final long token;
+    synchronized (lock) {
+      if (screenCapturer != null || localVideoTrack != null) throw new IllegalStateException("Screen capture is already active.");
+      token = ++captureGeneration;
+    }
+
+    final VideoCapturer capturer = new SyntheticTestCapturer();
+    VideoSource source = factory.createVideoSource(true);
+    SurfaceTextureHelper helper = SurfaceTextureHelper.create("PartnerScreenSyntheticCaptureThread", eglBase.getEglBaseContext());
+    if (helper == null) {
+      try { source.dispose(); } catch (Exception ignored) {}
+      throw new IllegalStateException("WebRTC synthetic capture thread is unavailable.");
+    }
+    VideoTrack track;
+    try {
+      CapturerObserver delegate = source.getCapturerObserver();
+      CapturerObserver observer = new CapturerObserver() {
+        @Override public void onCapturerStarted(boolean success) {
+          delegate.onCapturerStarted(success);
+          final CaptureListener current;
+          synchronized (lock) { current = isCurrentCaptureLocked(token) ? captureListener : null; }
+          if (current != null) current.onStarted(success);
+        }
+        @Override public void onCapturerStopped() { delegate.onCapturerStopped(); }
+        @Override public void onFrameCaptured(VideoFrame frame) { delegate.onFrameCaptured(frame); }
+      };
+      capturer.initialize(helper, context.getApplicationContext(), observer);
+      track = factory.createVideoTrack("partnerscreen-runtime-lab-video", source);
+      track.setEnabled(true);
+    } catch (Exception error) {
+      try { helper.dispose(); } catch (Exception ignored) {}
+      try { source.dispose(); } catch (Exception ignored) {}
+      throw error;
+    }
+
+    final boolean owned;
+    synchronized (lock) {
+      if (screenCapturer != null || localVideoTrack != null) {
+        owned = false;
+      } else {
+        ownedCaptureToken = token;
+        captureListener = listener;
+        screenCapturer = capturer;
+        localVideoSource = source;
+        surfaceTextureHelper = helper;
+        localVideoTrack = track;
+        owned = true;
+      }
+    }
+    if (!owned) {
+      disposeCaptureResources(new CaptureResources(capturer, track, source, helper));
+      throw new IllegalStateException("Screen capture is already active.");
+    }
+
+    try {
+      capturer.startCapture(Math.max(2, width), Math.max(2, height), Math.max(1, Math.min(60, fps)));
+    } catch (Exception error) {
+      CaptureResources resources;
+      synchronized (lock) { resources = takeCaptureLocked(); }
+      disposeCaptureResources(resources);
+      throw error;
+    }
+  }
+
   public void changeScreenCaptureFormat(int width, int height, int fps) {
     final VideoCapturer capturer;
     synchronized (lock) { capturer = screenCapturer; }
