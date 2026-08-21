@@ -28,10 +28,12 @@ export interface ErrorRecoveryPorts {
 
 /** One coordinated Error recovery path. Preserves trusted pairing. */
 export async function recoverProductError(ports: ErrorRecoveryPorts): Promise<void> {
-  await ports.pip.exitPip().catch(() => false);
-  await ports.keepAwake.disable().catch(() => false);
-  await ports.notifications.clearRequestNotification().catch(() => false);
-  await ports.media.resetToIdle().catch(() => undefined);
-  await ports.capture.resetToIdle().catch(() => undefined);
+  await Promise.all([
+    ports.pip.exitPip().catch(() => false),
+    ports.keepAwake.disable().catch(() => false),
+    ports.notifications.clearRequestNotification().catch(() => false),
+    ports.media.resetToIdle().catch(() => undefined),
+    ports.capture.resetToIdle().catch(() => undefined),
+  ]);
   await ports.session.clearError();
 }

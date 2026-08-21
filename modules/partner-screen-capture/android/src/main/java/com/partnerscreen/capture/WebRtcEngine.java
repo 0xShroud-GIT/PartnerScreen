@@ -90,6 +90,10 @@ public final class WebRtcEngine {
   private static final int BITRATE_APPLIED = 1;
   private static final int BITRATE_FAILED = 2;
   private int bitrateParametersState = BITRATE_NOT_ATTEMPTED;
+  private long framesCaptured = 0;
+  private long framesEnteringSender = 0;
+  private PeerConnection.IceConnectionState iceConnectionState = PeerConnection.IceConnectionState.NEW;
+  private PeerConnection.IceGatheringState iceGatheringState = PeerConnection.IceGatheringState.NEW;
 
   private WebRtcEngine() {}
 
@@ -150,7 +154,15 @@ public final class WebRtcEngine {
           if (current != null) current.onStarted(success);
         }
         @Override public void onCapturerStopped() { delegate.onCapturerStopped(); }
-        @Override public void onFrameCaptured(VideoFrame frame) { delegate.onFrameCaptured(frame); }
+        @Override public void onFrameCaptured(VideoFrame frame) {
+          delegate.onFrameCaptured(frame);
+          synchronized (lock) {
+            if (isCurrentCaptureLocked(token)) {
+              framesCaptured += 1;
+              framesEnteringSender += 1;
+            }
+          }
+        }
       };
       capturer.initialize(helper, context.getApplicationContext(), observer);
       track = factory.createVideoTrack("partnerscreen-screen-video", source);
@@ -186,80 +198,6 @@ public final class WebRtcEngine {
       capturer.startCapture(Math.max(2, width), Math.max(2, height), Math.max(1, Math.min(60, fps)));
     } catch (Exception error) {
       // Take ownership under the lock; actually dispose AFTER releasing it.
-      CaptureResources resources;
-      synchronized (lock) { resources = takeCaptureLocked(); }
-      disposeCaptureResources(resources);
-      throw error;
-    }
-  }
-
-  /**
-   * Runtime Laboratory capture source. This is deliberately a separate entry point so the
-   * MediaProjection path above is not refactored merely to make tests convenient. Native code
-   * rejects it unless the installed application is debuggable.
-   */
-  public void startSyntheticCaptureForTest(Context context, int width, int height, int fps, CaptureListener listener) throws Exception {
-    if (!RuntimeLabGate.INSTANCE.isDebuggable(context)) {
-      throw new SecurityException("Synthetic Runtime Lab capture requires a debuggable application.");
-    }
-    ensureInitialized(context);
-    final long token;
-    synchronized (lock) {
-      if (screenCapturer != null || localVideoTrack != null) throw new IllegalStateException("Screen capture is already active.");
-      token = ++captureGeneration;
-    }
-
-    final VideoCapturer capturer = new SyntheticTestCapturer();
-    VideoSource source = factory.createVideoSource(true);
-    SurfaceTextureHelper helper = SurfaceTextureHelper.create("PartnerScreenSyntheticCaptureThread", eglBase.getEglBaseContext());
-    if (helper == null) {
-      try { source.dispose(); } catch (Exception ignored) {}
-      throw new IllegalStateException("WebRTC synthetic capture thread is unavailable.");
-    }
-    VideoTrack track;
-    try {
-      CapturerObserver delegate = source.getCapturerObserver();
-      CapturerObserver observer = new CapturerObserver() {
-        @Override public void onCapturerStarted(boolean success) {
-          delegate.onCapturerStarted(success);
-          final CaptureListener current;
-          synchronized (lock) { current = isCurrentCaptureLocked(token) ? captureListener : null; }
-          if (current != null) current.onStarted(success);
-        }
-        @Override public void onCapturerStopped() { delegate.onCapturerStopped(); }
-        @Override public void onFrameCaptured(VideoFrame frame) { delegate.onFrameCaptured(frame); }
-      };
-      capturer.initialize(helper, context.getApplicationContext(), observer);
-      track = factory.createVideoTrack("partnerscreen-runtime-lab-video", source);
-      track.setEnabled(true);
-    } catch (Exception error) {
-      try { helper.dispose(); } catch (Exception ignored) {}
-      try { source.dispose(); } catch (Exception ignored) {}
-      throw error;
-    }
-
-    final boolean owned;
-    synchronized (lock) {
-      if (screenCapturer != null || localVideoTrack != null) {
-        owned = false;
-      } else {
-        ownedCaptureToken = token;
-        captureListener = listener;
-        screenCapturer = capturer;
-        localVideoSource = source;
-        surfaceTextureHelper = helper;
-        localVideoTrack = track;
-        owned = true;
-      }
-    }
-    if (!owned) {
-      disposeCaptureResources(new CaptureResources(capturer, track, source, helper));
-      throw new IllegalStateException("Screen capture is already active.");
-    }
-
-    try {
-      capturer.startCapture(Math.max(2, width), Math.max(2, height), Math.max(1, Math.min(60, fps)));
-    } catch (Exception error) {
       CaptureResources resources;
       synchronized (lock) { resources = takeCaptureLocked(); }
       disposeCaptureResources(resources);
@@ -349,20 +287,49 @@ public final class WebRtcEngine {
   }
 
   public boolean addRemoteIceCandidate(String sessionId, String sdpMid, int sdpMLineIndex, String candidate) {
-    if (!isPrivateHostCandidate(candidate) || sdpMLineIndex < 0 || sdpMLineIndex > 32) return false;
+    final CandidateClass classified = classifyCandidate(candidate);
+    if (sdpMLineIndex < 0 || sdpMLineIndex > 32) {
+      emitClassified(sessionId, "remote", classified == null ? rejected("malformed") : classified.rejected("malformed"));
+      return false;
+    }
+    if (classified == null || !classified.accepted) {
+      emitClassified(sessionId, "remote", classified == null ? rejected("malformed") : classified);
+      return false;
+    }
     synchronized (lock) {
-      if (peerConnection == null || mediaSessionId == null || !mediaSessionId.equals(sessionId)) return false;
+      if (peerConnection == null || mediaSessionId == null || !mediaSessionId.equals(sessionId)) {
+        emitClassified(sessionId, "remote", classified.rejected("stale_session"));
+        return false;
+      }
       IceCandidate ice = new IceCandidate(sdpMid.isEmpty() ? null : sdpMid, sdpMLineIndex, candidate);
       if (peerConnection.getRemoteDescription() == null) {
         if (pendingRemoteCandidates.size() >= MAX_PENDING_CANDIDATES) {
           // Fail closed on overflow rather than unbounded buffering; the caller fails the session.
           pendingRemoteCandidates.clear();
+          emitClassified(sessionId, "remote", classified.rejected("overflow"));
           return false;
         }
         pendingRemoteCandidates.add(ice);
+        emitClassified(sessionId, "remote", classified);
         return true;
       }
-      return peerConnection.addIceCandidate(ice);
+      boolean added = peerConnection.addIceCandidate(ice);
+      emitClassified(sessionId, "remote", added ? classified : classified.rejected("stale_session"));
+      return added;
+    }
+  }
+
+  public boolean restartIce(String sessionId) {
+    synchronized (lock) {
+      if (peerConnection == null || mediaSessionId == null || !mediaSessionId.equals(sessionId)) return false;
+      try {
+        // Jitsi WebRTC 124 / org.webrtc.PeerConnection.restartIce() marks ICE for restart.
+        // The next createOffer() includes new ICE credentials without recreating the PeerConnection.
+        peerConnection.restartIce();
+        return true;
+      } catch (RuntimeException ignored) {
+        return false;
+      }
     }
   }
 
@@ -376,6 +343,10 @@ public final class WebRtcEngine {
       remoteVideoTrack = null;
       localVideoSender = null;
       bitrateParametersState = BITRATE_NOT_ATTEMPTED;
+      framesCaptured = 0;
+      framesEnteringSender = 0;
+      iceConnectionState = PeerConnection.IceConnectionState.NEW;
+      iceGatheringState = PeerConnection.IceGatheringState.NEW;
       closingPeer = peerConnection;
       peerConnection = null;
       mediaSessionId = null;
@@ -477,6 +448,8 @@ public final class WebRtcEngine {
   public void getStats(String sessionId, StatsCallback callback) {
     final PeerConnection pc;
     final int parametersState;
+    final long capturedAtRequest;
+    final long enteringAtRequest;
     synchronized (lock) {
       if (peerConnection == null || mediaSessionId == null || !mediaSessionId.equals(sessionId)) {
         callback.onStats(null);
@@ -484,6 +457,8 @@ public final class WebRtcEngine {
       }
       pc = peerConnection;
       parametersState = bitrateParametersState;
+      capturedAtRequest = framesCaptured;
+      enteringAtRequest = framesEnteringSender;
     }
     try {
       // Jitsi WebRTC 124 / org.webrtc: the current stats API is getStats(RTCStatsCollectorCallback).
@@ -494,6 +469,8 @@ public final class WebRtcEngine {
             Map<String, Object> sanitized = new HashMap<>();
             if (parametersState == BITRATE_APPLIED) sanitized.put("bitrateParametersState", "applied");
             else if (parametersState == BITRATE_FAILED) sanitized.put("bitrateParametersState", "failed");
+            putNumber(sanitized, "framesCaptured", Long.valueOf(capturedAtRequest));
+            putNumber(sanitized, "framesEnteringSender", Long.valueOf(enteringAtRequest));
             // Emit only sanitized numeric metrics, never full IP/SDP/candidate bodies.
             for (org.webrtc.RTCStats stat : report.getStatsMap().values()) {
               Map<String, Object> members = stat.getMembers();
@@ -565,11 +542,26 @@ public final class WebRtcEngine {
     private final long generation;
     PeerObserver(String sessionId, long generation) { this.sessionId = sessionId; this.generation = generation; }
     @Override public void onSignalingChange(PeerConnection.SignalingState state) {}
-    @Override public void onIceConnectionChange(PeerConnection.IceConnectionState state) {}
+    @Override public void onIceConnectionChange(PeerConnection.IceConnectionState state) {
+      synchronized (lock) {
+        if (!isCurrentPeerLocked(sessionId, generation)) return;
+        iceConnectionState = state;
+        emitIceStateLocked(sessionId);
+      }
+    }
     @Override public void onIceConnectionReceivingChange(boolean receiving) {}
-    @Override public void onIceGatheringChange(PeerConnection.IceGatheringState state) {}
+    @Override public void onIceGatheringChange(PeerConnection.IceGatheringState state) {
+      synchronized (lock) {
+        if (!isCurrentPeerLocked(sessionId, generation)) return;
+        iceGatheringState = state;
+        emitIceStateLocked(sessionId);
+      }
+    }
     @Override public void onIceCandidate(IceCandidate candidate) {
-      if (!isPrivateHostCandidate(candidate.sdp)) return;
+      CandidateClass classified = classifyCandidate(candidate == null ? null : candidate.sdp);
+      if (classified == null) classified = rejected("malformed");
+      emitClassified(sessionId, "local", classified);
+      if (!classified.accepted) return;
       synchronized (lock) {
         if (!isCurrentPeerLocked(sessionId, generation)) return;
         Map<String, Object> event = baseEvent("ice_candidate", sessionId);
@@ -682,6 +674,83 @@ public final class WebRtcEngine {
     Map<String, Object> event = new HashMap<>(); event.put("type", type); event.put("sessionId", sessionId); return event;
   }
   private void emit(Map<String, Object> event) { EventListener listener = eventListener; if (listener != null) listener.onEvent(event); }
+
+  private void emitIceStateLocked(String sessionId) {
+    Map<String, Object> event = baseEvent("ice_state", sessionId);
+    event.put("iceConnectionState", iceConnectionState.name().toLowerCase(Locale.US));
+    event.put("iceGatheringState", iceGatheringState.name().toLowerCase(Locale.US));
+    emit(event);
+  }
+
+  private void emitClassified(String sessionId, String direction, CandidateClass classified) {
+    if (sessionId == null || classified == null) return;
+    Map<String, Object> event = baseEvent("ice_classified", sessionId);
+    Map<String, Object> classification = new HashMap<String, Object>();
+    classification.put("direction", direction);
+    classification.put("candidateType", classified.candidateType);
+    classification.put("transport", classified.transport);
+    classification.put("addressFamily", classified.addressFamily);
+    classification.put("accepted", Boolean.valueOf(classified.accepted));
+    if (classified.rejectionReason != null) classification.put("rejectionReason", classified.rejectionReason);
+    event.put("classification", classification);
+    emit(event);
+  }
+
+  private static final class CandidateClass {
+    final String candidateType;
+    final String transport;
+    final String addressFamily;
+    final boolean accepted;
+    final String rejectionReason;
+    CandidateClass(String candidateType, String transport, String addressFamily, boolean accepted, String rejectionReason) {
+      this.candidateType = candidateType;
+      this.transport = transport;
+      this.addressFamily = addressFamily;
+      this.accepted = accepted;
+      this.rejectionReason = rejectionReason;
+    }
+    CandidateClass rejected(String reason) {
+      return new CandidateClass(candidateType, transport, addressFamily, false, reason);
+    }
+  }
+
+  private static CandidateClass rejected(String reason) {
+    return new CandidateClass("other", "other", "other", false, reason);
+  }
+
+  private static CandidateClass classifyCandidate(String candidate) {
+    if (candidate == null || candidate.length() < 8 || candidate.length() > 2048) return rejected("malformed");
+    String[] parts = candidate.trim().split("\\s+");
+    int typIndex = -1;
+    for (int i = 0; i < parts.length; i++) {
+      if ("typ".equalsIgnoreCase(parts[i])) { typIndex = i; break; }
+    }
+    if (parts.length < 8 || typIndex < 6 || typIndex + 1 >= parts.length) return rejected("malformed");
+    String transportRaw = parts[2].toLowerCase(Locale.US);
+    String transport = "udp".equals(transportRaw) ? "udp" : "tcp".equals(transportRaw) ? "tcp" : "other";
+    String address = parts[4];
+    String family = addressFamilyOf(address);
+    String typeRaw = parts[typIndex + 1].toLowerCase(Locale.US);
+    String candidateType = "host".equals(typeRaw) || "srflx".equals(typeRaw) || "relay".equals(typeRaw) || "prflx".equals(typeRaw) ? typeRaw : "other";
+    if ("relay".equals(candidateType)) return new CandidateClass(candidateType, transport, family, false, "relay");
+    if ("srflx".equals(candidateType)) return new CandidateClass(candidateType, transport, family, false, "srflx");
+    if (!"host".equals(candidateType)) return new CandidateClass(candidateType, transport, family, false, "not_host");
+    if ("mdns".equals(family)) return new CandidateClass(candidateType, transport, family, false, "mdns");
+    if ("ipv6".equals(family)) return new CandidateClass(candidateType, transport, family, false, "ipv6");
+    if (!"ipv4".equals(family)) return new CandidateClass(candidateType, transport, family, false, "not_private_ipv4");
+    if (!isPrivateIpv4(address)) return new CandidateClass(candidateType, transport, family, false, "public_address");
+    return new CandidateClass(candidateType, transport, family, true, null);
+  }
+
+  private static String addressFamilyOf(String address) {
+    if (address == null || address.isEmpty()) return "other";
+    String lower = address.toLowerCase(Locale.US);
+    if (lower.endsWith(".local")) return "mdns";
+    if (address.indexOf(':') >= 0 && address.indexOf('.') >= 0) return "mdns";
+    if (address.indexOf(':') >= 0) return "ipv6";
+    if (address.matches("^\\d{1,3}(?:\\.\\d{1,3}){3}$")) return "ipv4";
+    return "other";
+  }
 
   private static boolean isPrivateHostCandidate(String candidate) {
     if (candidate == null || candidate.length() > 2048) return false;

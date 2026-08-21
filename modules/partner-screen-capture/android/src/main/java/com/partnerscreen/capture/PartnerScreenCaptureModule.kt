@@ -17,7 +17,6 @@ class PartnerScreenCaptureModule : Module() {
   private val lock = Any()
   private var consentPromise: Promise? = null
   private var pendingGrant: CaptureGrant? = null
-  private var syntheticSessionId: String? = null
   private val bridgeListener: (Map<String, Any>) -> Unit = { event -> sendEvent("onPartnerScreenCaptureEvent", event) }
   private val mediaListener = WebRtcEngine.EventListener { event -> sendEvent("onPartnerScreenMediaEvent", event) }
 
@@ -45,7 +44,7 @@ class PartnerScreenCaptureModule : Module() {
         return@AsyncFunction
       }
       synchronized(lock) {
-        if (consentPromise != null || pendingGrant != null || syntheticSessionId != null || CaptureBridge.state != "idle") {
+        if (consentPromise != null || pendingGrant != null || CaptureBridge.state != "idle") {
           promise.resolve(false)
           return@AsyncFunction
         }
@@ -89,57 +88,6 @@ class PartnerScreenCaptureModule : Module() {
       CaptureBridge.emit("starting", sessionId)
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
       true
-    }
-
-    AsyncFunction("startSyntheticCaptureForTest") { sessionId: String ->
-      require(sessionId.isNotBlank()) { "Capture session is invalid." }
-      val context = appContext.reactContext ?: return@AsyncFunction false
-      if (!RuntimeLabGate.isDebuggable(context)) return@AsyncFunction false
-
-      val claimed = synchronized(lock) {
-        if (syntheticSessionId != null || pendingGrant != null || consentPromise != null || CaptureBridge.state != "idle") false
-        else { syntheticSessionId = sessionId; true }
-      }
-      if (!claimed) return@AsyncFunction false
-
-      CaptureBridge.stopRequest = { reason -> Handler(Looper.getMainLooper()).post { stopSyntheticCapture(reason) } }
-      CaptureBridge.emit("starting", sessionId)
-      try {
-        WebRtcEngine.getInstance().startSyntheticCaptureForTest(
-          context.applicationContext,
-          640,
-          360,
-          30,
-          object : WebRtcEngine.CaptureListener {
-            override fun onStarted(success: Boolean) {
-              Handler(Looper.getMainLooper()).post {
-                val current = synchronized(lock) { syntheticSessionId == sessionId }
-                if (!current) return@post
-                if (success) CaptureBridge.emit("started", sessionId)
-                else {
-                  CaptureBridge.emit("error", sessionId, code = "capture_start_failed")
-                  stopSyntheticCapture("service_destroyed", emitStopped = false)
-                }
-              }
-            }
-
-            override fun onProjectionStopped() {
-              // Synthetic frames do not own an Android MediaProjection token.
-            }
-          },
-        )
-        true
-      } catch (_: Exception) {
-        val current = synchronized(lock) {
-          if (syntheticSessionId == sessionId) { syntheticSessionId = null; true } else false
-        }
-        if (current) {
-          CaptureBridge.stopRequest = null
-          CaptureBridge.emit("error", sessionId, code = "capture_start_failed")
-          WebRtcEngine.getInstance().stopScreenCapture()
-        }
-        false
-      }
     }
 
     AsyncFunction("stopCapture") { promise: Promise ->
@@ -189,6 +137,7 @@ class PartnerScreenCaptureModule : Module() {
       WebRtcEngine.getInstance().addRemoteIceCandidate(sessionId, sdpMid, sdpMLineIndex, candidate)
     }
     AsyncFunction("closeMedia") { sessionId: String -> WebRtcEngine.getInstance().closeMedia(sessionId); true }
+    AsyncFunction("restartIce") { sessionId: String -> WebRtcEngine.getInstance().restartIce(sessionId) }
     AsyncFunction("getMediaStats") { sessionId: String, promise: Promise ->
       WebRtcEngine.getInstance().getStats(sessionId) { stats ->
         if (stats == null) promise.resolve(null) else promise.resolve(stats)
@@ -198,31 +147,13 @@ class PartnerScreenCaptureModule : Module() {
     OnActivityDestroys { clearPendingConsent() }
     OnDestroy {
       clearPendingConsent()
-      stopSyntheticCapture("service_destroyed")
       if (CaptureBridge.listener === bridgeListener) CaptureBridge.listener = null
       WebRtcEngine.getInstance().setEventListener(null)
     }
   }
 
-  private fun stopSyntheticCapture(reason: String, emitStopped: Boolean = true) {
-    val sessionId = synchronized(lock) {
-      val current = syntheticSessionId
-      syntheticSessionId = null
-      current
-    } ?: return
-    CaptureBridge.stopRequest = null
-    WebRtcEngine.getInstance().stopScreenCapture()
-    if (emitStopped) CaptureBridge.emit("stopped", sessionId, reason = normalizeStopReason(reason))
-  }
-
   private fun clearPendingConsent() {
     val pending = synchronized(lock) { pendingGrant = null; consentPromise.also { consentPromise = null } }
     pending?.resolve(false)
-  }
-
-  private fun normalizeStopReason(reason: String): String = when (reason) {
-    "user" -> "user"
-    "notification" -> "notification"
-    else -> "service_destroyed"
   }
 }
