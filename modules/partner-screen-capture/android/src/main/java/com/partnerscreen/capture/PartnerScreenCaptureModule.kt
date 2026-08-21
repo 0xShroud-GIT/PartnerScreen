@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -88,7 +90,24 @@ class PartnerScreenCaptureModule : Module() {
       true
     }
 
-    AsyncFunction("stopCapture") { clearPendingConsent(); CaptureBridge.requestStop("user"); true }
+    AsyncFunction("stopCapture") { promise: Promise ->
+      clearPendingConsent()
+      if (CaptureBridge.state == "idle") {
+        promise.resolve(true)
+        return@AsyncFunction
+      }
+      val mainHandler = Handler(Looper.getMainLooper())
+      var settled = false
+      val settle = { ok: Boolean ->
+        if (!settled) {
+          settled = true
+          promise.resolve(ok)
+        }
+      }
+      CaptureBridge.waitForIdle { ok -> mainHandler.post { settle(ok) } }
+      CaptureBridge.requestStop("user")
+      mainHandler.postDelayed({ settle(false) }, 5_000)
+    }
     Function("getState") { CaptureBridge.state }
 
     AsyncFunction("prepareRequesterMedia") { sessionId: String ->
