@@ -1,0 +1,62 @@
+name: Import canonical PartnerScreen tree
+
+on:
+  push:
+    paths:
+      - '.import/TRIGGER'
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out staging branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Verify and reconstruct canonical repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat \
+            .import/part00 .import/part01 .import/part02 .import/part03 \
+            .import/fix040 .import/fix041 .import/fix042 \
+            .import/part05 .import/part06 .import/part07 .import/part08 \
+            .import/part09 .import/part10 .import/part11 .import/part12 \
+            .import/part13 .import/part14 .import/part15 \
+            > /tmp/partnerscreen-import.b64
+
+          base64 --decode /tmp/partnerscreen-import.b64 > /tmp/partnerscreen-import.tar.xz
+          echo '8b41836ed4d4d3d34f5ca80ca46324fcf62e183465c387cd4dcec5b11161a3ca  /tmp/partnerscreen-import.tar.xz' | sha256sum --check --strict
+
+          mkdir -p /tmp/partnerscreen-canonical
+          tar -xJf /tmp/partnerscreen-import.tar.xz -C /tmp/partnerscreen-canonical
+
+          test "$(find /tmp/partnerscreen-canonical -type f | wc -l | tr -d ' ')" = '168'
+          test -f /tmp/partnerscreen-canonical/README.md
+          test -f /tmp/partnerscreen-canonical/AGENTS.md
+          test -f /tmp/partnerscreen-canonical/CHECKPOINT.md
+          test -f /tmp/partnerscreen-canonical/package.json
+          test -d /tmp/partnerscreen-canonical/app
+          test -d /tmp/partnerscreen-canonical/src
+          test -d /tmp/partnerscreen-canonical/modules
+          test -d /tmp/partnerscreen-canonical/tests
+          test -d /tmp/partnerscreen-canonical/docs
+
+          cp .github/workflows/import-partnerscreen.yml /tmp/import-partnerscreen.yml
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a /tmp/partnerscreen-canonical/. .
+          mkdir -p .github/workflows
+          cp /tmp/import-partnerscreen.yml .github/workflows/import-partnerscreen.yml
+
+          test ! -e .import
+
+          git config user.name '0xShroud-GIT'
+          git config user.email '0xshroud.me@gmail.com'
+          git add -A
+          git commit -m 'Import canonical PartnerScreen working repository'
+          git push origin HEAD:main
