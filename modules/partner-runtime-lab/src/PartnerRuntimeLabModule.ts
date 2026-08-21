@@ -1,6 +1,6 @@
 import { NativeModule, requireNativeModule } from 'expo';
 
-class PartnerRuntimeLabModule extends NativeModule<Record<string, never>> {
+declare class PartnerRuntimeLabModule extends NativeModule<Record<string, never>> {
   consumePairingQr(): Promise<string | null>;
 }
 
