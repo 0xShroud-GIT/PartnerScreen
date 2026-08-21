@@ -53,9 +53,20 @@ function cipher(): AuthenticatedSignalingCipher { return new AuthenticatedSignal
 async function settle(): Promise<void> { for (let i = 0; i < 6; i += 1) await new Promise<void>((resolve) => setImmediate(resolve)); }
 const deviceA = '11111111-1111-4111-8111-111111111111', deviceB = '22222222-2222-4222-8222-222222222222', pairId = '33333333-3333-4333-8333-333333333333', secret = 'ab'.repeat(32);
 
-test('pair activation starts trusted presence; JS recreation can reattach the same native listener', async (t) => {
-  // P0-D trusted presence not yet implemented in P0-A phase — skip until P0-D lands.
-  t.skip('P0-D presence will be validated after P0-D implementation');
+test('pair activation starts trusted presence; JS recreation can reattach the same native listener', async () => {
+  const network = new FakeNetwork(), transport = new FakeTransport('192.168.8.10', network);
+  const session = new ControlSession(transport, cipher());
+  await session.activate({ pairId, localDeviceId: deviceA, partnerDeviceId: deviceB, pairSecretHex: secret });
+  const first = await session.ensureListening();
+  assert.equal(transport.presenceStarts, 1);
+  assert.ok(transport.startCount >= 1);
+  const starts = transport.startCount;
+  const again = await session.ensureListening();
+  assert.equal(again.port, first.port);
+  assert.equal(transport.startCount, starts);
+  await session.deactivate();
+  assert.ok(transport.presenceStops >= 1);
+  session.dispose();
 });
 
 test('two control sessions mutually authenticate before routing sealed messages', async () => {
