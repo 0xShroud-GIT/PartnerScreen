@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { PartnerScreenTwin } from './PartnerScreenTwin';
+import { DeterministicPartnerScreenTwin } from './DeterministicTwin';
 import { RuntimeInvariantMonitor } from '../../src/runtime/RuntimeInvariantMonitor';
 import { VirtualClock } from './VirtualClock';
 import { VirtualNetwork } from './VirtualNetwork';
 
 test('Runtime Lab pairs two real PairingService instances and reaches actual first-frame LIVE through production controllers', async () => {
-  const twin = new PartnerScreenTwin(101);
+  const twin = new DeterministicPartnerScreenTwin(101);
   try {
     await twin.initialize();
     await twin.pair();
