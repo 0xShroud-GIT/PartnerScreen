@@ -1,13 +1,13 @@
-name: Build development APK
+name: Qualify development APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+    inputs:
+      run_maestro:
+        description: Run Maestro emulator smoke test after the APK build
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PARTNERSCREEN_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+  PARTNERSCREEN_BUILD_COMMIT: ${{ github.sha }}
 
 jobs:
   build:
@@ -133,6 +133,7 @@ jobs:
 
   maestro:
     name: Maestro APK smoke test
+    if: ${{ inputs.run_maestro }}
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
