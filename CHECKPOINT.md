@@ -11,11 +11,11 @@ Mission 0 source work plus the five merge-blocker corrections are complete on th
 
 - native `getStats(RTCStatsCollectorCallback)` one-arg API
 - absolute initial usable-video deadline (15 seconds)
-- unconditional per-reconnect-attempt timeout (8s, plus existing 5s frame grace)
+- bounded reconnect: requester uses the 5s frame-grace deadline; sharer uses the 8s attempt watchdog
 - Error remains Error until explicit `recoverProductError()` / `clearError()`; availability only updates cached reachability
 - Stop → immediate Start: latest valid `ACTION_START` while stopping is copied and queued; old-session callbacks cannot own the replacement
 - incoming-request taps use `partnerscreen://incoming-request/<uuid>` plus native `OnNewIntent` and Expo Linking; stale IDs do nothing
-- notifier advances desired-generation when the session listener fires; a late show of A cannot remain authoritative over B
+- notifier advances desired-generation when the session listener fires; a stale completed show is cleared before the queued generation proceeds; `activeSessionId` is set only after the current show succeeds
 - encoder bitrate warning is shown only for a sharer after a failed sender configure
 - PiP uses actual remote geometry and exits on session end
 - sanitized production media stats plumbed into controller/presentation
@@ -24,7 +24,7 @@ Mission 0 source work plus the five merge-blocker corrections are complete on th
 
 - `npm ci`: PASS (649 packages)
 - `npm run typecheck`: PASS
-- `npm run test:product`: PASS (174/174)
+- `npm run test:product`: PASS (175/175)
 - `npm run check:contracts`: PASS (13/13)
 - `npm run check:baseline`: PASS
 - `npm run sanitize`: PASS

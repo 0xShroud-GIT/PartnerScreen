@@ -76,23 +76,28 @@ export class IncomingRequestNotifier {
       if (!this.isCurrent(generation)) return;
       const shown = await this.notifications.showRequestNotification(sessionId, partnerName).catch(() => false);
       if (!this.isCurrent(generation)) {
-        await this.reconcileNative();
+        // Stale completed show cannot remain on the device while a newer generation is queued.
+        await this.clearNativeNotification();
         return;
       }
       const latest = this.session.getSnapshot();
       if (latest.type !== 'IncomingRequest' || latest.sessionId !== sessionId) {
-        await this.reconcileNative();
+        await this.clearNativeNotification();
+        return;
+      }
+      if (!shown) {
+        await this.clearNativeNotification();
         return;
       }
       this.activeSessionId = sessionId;
-      if (shown) await this.diagnostics.append('notification_shown').catch(() => undefined);
+      await this.diagnostics.append('notification_shown').catch(() => undefined);
       return;
     }
 
     if (this.activeSessionId) {
       await this.notifications.clearRequestNotification().catch(() => undefined);
       if (!this.isCurrent(generation)) {
-        await this.reconcileNative();
+        await this.clearNativeNotification();
         return;
       }
       const latest = this.session.getSnapshot();
@@ -102,12 +107,7 @@ export class IncomingRequestNotifier {
     }
   }
 
-  private async reconcileNative(): Promise<void> {
-    const latest = this.session.getSnapshot();
-    if (latest.type === 'IncomingRequest') {
-      // Latest queued generation owns the show. A stale generation must not commit or overwrite.
-      return;
-    }
+  private async clearNativeNotification(): Promise<void> {
     await this.notifications.clearRequestNotification().catch(() => undefined);
     this.activeSessionId = null;
   }

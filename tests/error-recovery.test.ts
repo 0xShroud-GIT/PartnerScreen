@@ -100,6 +100,51 @@ test('stale notification show cannot overwrite a newer incoming request', async 
   notifier.dispose();
 });
 
+test('stale completed show is cleared before a failed newer show can remain authoritative', async () => {
+  const shown: string[] = [];
+  const native: { sessionId: string | null } = { sessionId: null };
+  let showA: (value: boolean) => void = () => undefined;
+  const fakeNotifications = {
+    async showRequestNotification(sessionId: string): Promise<boolean> {
+      shown.push(sessionId);
+      if (sessionId === sessionIdA) {
+        return new Promise<boolean>((resolve) => {
+          showA = (value) => {
+            if (value) native.sessionId = sessionIdA;
+            resolve(value);
+          };
+        });
+      }
+      return false;
+    },
+    async clearRequestNotification(): Promise<boolean> {
+      native.sessionId = null;
+      return true;
+    },
+    async ensurePermission(): Promise<boolean> { return true; },
+  };
+  const fakeSessionState: { value: SessionState } = { value: { type: 'PairedOffline', pair } };
+  const listeners = new Set<() => void>();
+  const fakeSession = {
+    getSnapshot: () => fakeSessionState.value,
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); },
+    setState: (next: SessionState) => { fakeSessionState.value = next; for (const listener of listeners) listener(); },
+  };
+  const diagnostics = { events: [] as DiagnosticEventKind[], async append(kind: DiagnosticEventKind) { this.events.push(kind); } };
+  const notifier = new IncomingRequestNotifier(fakeSession, fakeNotifications, diagnostics);
+  await settle();
+  fakeSession.setState({ type: 'IncomingRequest', pair, sessionId: sessionIdA, expiresAt: '2026-08-19T00:01:00.000Z' });
+  await settle();
+  fakeSession.setState({ type: 'IncomingRequest', pair, sessionId: sessionIdB, expiresAt: '2026-08-19T00:01:00.000Z' });
+  await settle();
+  showA(true);
+  await settle();
+  assert.deepEqual(shown, [sessionIdA, sessionIdB]);
+  assert.equal(native.sessionId, null);
+  assert.equal(notifier.getActiveSessionId(), null);
+  notifier.dispose();
+});
+
 test('keep-awake success is not claimed unless the port returns true', async () => {
   const kinds: DiagnosticEventKind[] = [];
   const enable = async (ok: boolean): Promise<void> => { if (ok) kinds.push('keep_awake_enabled'); };
