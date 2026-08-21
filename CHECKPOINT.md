@@ -3,7 +3,7 @@
 **Updated:** 2026-08-21  
 **Phase:** C09 Android build + physical qualification  
 **Last accepted source checkpoint:** `69afe2af4a01453009a4df52e0e8f00eb92c8008` (C08R2)  
-**Current package state:** C08R2 source plus the C09 development-APK build-script recovery and repository documentation cleanup. This cleaned ZIP is not itself a Git commit yet.
+**Current repository state:** Canonical GitHub repository initialized on `main`. Import commit `575df375cfb2c2b12e4b5c4afb86e7e37cdd6a8f` exactly matched the cleaned 168-file tree (`627235b5739c127db6667660c81a7051b7c48893`). Application/runtime source remains the C08R2 source plus the C09 development-APK build-script recovery.
 
 ## Current truth
 
@@ -52,21 +52,33 @@ During this cleanup/repack:
 - Expo autolinking/full TypeScript product replay was not completed in this packaging environment because dependencies could not be restored here; do not promote the historical 134/134 result into a post-cleanup/post-build-script-fix test run;
 - `npm run sanitize` against the cleaned tracked tree: PASS.
 
-The next canonical GitHub commit must still receive the full source gate listed below.
+The canonical GitHub repository now exists. The full source gate listed below still needs to be run against the current GitHub `main` before an APK is treated as a C09 candidate.
+
+## GitHub verification and sanitation — 2026-08-21
+
+- canonical import commit: `575df375cfb2c2b12e4b5c4afb86e7e37cdd6a8f`;
+- import tree: `627235b5739c127db6667660c81a7051b7c48893`, exactly matching the cleaned local repository;
+- tracked file count at import: **168**;
+- `.import/` and temporary `.github/` importer content are absent from `main`;
+- the two temporary import branch refs were repointed to the canonical `main` commit so they no longer expose staging trees;
+- `npm run sanitize`: **PASS** on the exact canonical import tree;
+- `npm run check:baseline`: **PASS** on the exact canonical import tree;
+- additional high-confidence credential scan: **PASS** — no private keys, common cloud/API tokens, credential-bearing lockfile URLs, or npm auth tokens detected;
+- no tracked `.env`, signing keys/certificates, generated/cache directories, database/log/archive artifacts, or files over 1 MiB were found.
+
+This sanitation pass did not change application/runtime/native/test source.
 
 ## Current blocker
 
 **C09 does not have Android B-PASS yet.**
 
-The recovered build script must be committed in the canonical GitHub repo, all source gates rerun against that exact commit, and an APK successfully built on an Android SDK-equipped machine before physical qualification begins.
+The recovered build script is committed in the canonical GitHub repo. All source gates must still be rerun against the exact current commit, and an APK must be successfully built on an Android SDK-equipped machine before physical qualification begins.
 
 Do not describe C09 as passed and do not begin device evidence against an unfrozen/unidentified APK.
 
 ## Next work
 
-1. Upload/commit this cleaned repository to the canonical GitHub repo.
-2. Record the resulting Git commit.
-3. Run the full source gate:
+1. Run the full source gate against the exact current GitHub `main`:
    - `npm ci`
    - `npm run typecheck`
    - `npm run test:product`
@@ -75,11 +87,11 @@ Do not describe C09 as passed and do not begin device evidence against an unfroz
    - `npm run sanitize`
    - `npm run config:check`
    - `npm run deps:check`
-4. On an Android SDK/JDK-equipped build lane, set `PARTNERSCREEN_BUILD_COMMIT` to that exact commit.
-5. Run `npm run build:dev-apk -- --preflight`, then `npm run build:dev-apk`.
-6. Freeze and record the resulting APK SHA-256.
-7. Perform C09 physical qualification on the exact frozen APK, including two-phone request/accept/decline, MediaProjection consent/revoke, notification Stop, real first-frame LIVE truth, orientation/renderer lifecycle, Wi-Fi interruption/recovery, teardown, and a second complete session.
-8. Fix only reproduced defects, add focused regression coverage, rerun applicable gates, and update this checkpoint.
+2. On an Android SDK/JDK-equipped build lane, set `PARTNERSCREEN_BUILD_COMMIT` to that exact commit.
+3. Run `npm run build:dev-apk -- --preflight`, then `npm run build:dev-apk`.
+4. Freeze and record the resulting APK SHA-256.
+5. Perform C09 physical qualification on the exact frozen APK, including two-phone request/accept/decline, MediaProjection consent/revoke, notification Stop, real first-frame LIVE truth, orientation/renderer lifecycle, Wi-Fi interruption/recovery, teardown, and a second complete session.
+6. Fix only reproduced defects, add focused regression coverage, rerun applicable gates, and update this checkpoint.
 
 ## High-risk invariants to protect during C09 fixes
 
