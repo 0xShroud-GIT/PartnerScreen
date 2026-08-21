@@ -24,6 +24,11 @@ import { MediaSessionController } from '../media/MediaSessionController';
 import { InstrumentedPairingCrypto } from './InstrumentedPairingCrypto';
 import { LocalIdentityService } from './LocalIdentityService';
 import { PairingService } from './PairingService';
+import { IncomingRequestNotifier } from '../request/IncomingRequestNotifier';
+import { ExpoRequestNotification } from '../platform/notifications/ExpoRequestNotification';
+import { ExpoLifecycle } from '../platform/lifecycle/ExpoLifecycle';
+import { ExpoKeepAwake } from '../platform/keepawake/ExpoKeepAwake';
+import { ExpoPip } from '../platform/pip/ExpoPip';
 
 const clock: Clock = { nowIso: () => new Date().toISOString() };
 const ordinaryStore = new AsyncStorageKeyValueStore();
@@ -44,8 +49,29 @@ const webRtcMediaPort = new ExpoWebRtcMedia();
 const mediaSessionController = new MediaSessionController(webRtcMediaPort, sessionController, screenCaptureCoordinator, diagnosticsRepository);
 const discoveryAuthenticator = new HmacDiscoveryAuthenticator(new ExpoDiscoveryHmac());
 const availabilityService = new AvailabilityService(pairTrustRepository, diagnosticsRepository, new ExpoPartnerDiscovery(), discoveryAuthenticator, controlSession);
+const requestNotificationPort = new ExpoRequestNotification();
+const incomingRequestNotifier = new IncomingRequestNotifier(sessionController, requestNotificationPort, diagnosticsRepository);
+const lifecyclePort = new ExpoLifecycle();
+const keepAwakePort = new ExpoKeepAwake();
+const pipPort = new ExpoPip();
 
 availabilityService.subscribe(() => sessionController.updateAvailability(availabilityService.getSnapshot()));
+
+// Lifecycle diagnostics: activity lifecycle + app background/foreground instrumentation
+try {
+  lifecyclePort.subscribe((event) => {
+    void diagnosticsRepository.append(event.type as any).catch(() => undefined);
+  });
+  // AppState background/foreground is handled in React layer via AppState listener (see _layout)
+  // Native pip events are also observed there; keep this native subscription lightweight.
+  pipPort.subscribe((event) => {
+    const kind = event.isInPictureInPictureMode ? 'pip_entered' : 'pip_exited';
+    void diagnosticsRepository.append(kind as any).catch(() => undefined);
+  });
+} catch {
+  // diagnostics never break product flow
+}
+
 let pairedLifecycle: Promise<void> = Promise.resolve();
 pairingService.subscribe(() => {
   pairedLifecycle = pairedLifecycle.then(async () => {
@@ -65,4 +91,5 @@ void pairingService.initialize().catch(() => undefined);
 export const appServices = {
   clock, diagnosticsRepository, identityRepository, localIdentityService, pairTrustRepository, pairingService,
   availabilityService, controlSession, sessionController, screenCaptureCoordinator, mediaSessionController,
+  incomingRequestNotifier, requestNotificationPort, lifecyclePort, keepAwakePort, pipPort,
 };

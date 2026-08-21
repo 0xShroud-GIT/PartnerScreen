@@ -7,5 +7,6 @@ export function useMediaSession() {
     state,
     rendererFirstFrame: (sessionId: string, rendererEpoch: number) => appServices.mediaSessionController.rendererFirstFrame(sessionId, rendererEpoch),
     reconcile: () => appServices.mediaSessionController.reconcile(),
+    clearError: () => appServices.mediaSessionController.clearError(),
   };
 }

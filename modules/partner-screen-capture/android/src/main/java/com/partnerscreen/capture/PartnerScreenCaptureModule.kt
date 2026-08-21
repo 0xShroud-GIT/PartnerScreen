@@ -118,6 +118,11 @@ class PartnerScreenCaptureModule : Module() {
       WebRtcEngine.getInstance().addRemoteIceCandidate(sessionId, sdpMid, sdpMLineIndex, candidate)
     }
     AsyncFunction("closeMedia") { sessionId: String -> WebRtcEngine.getInstance().closeMedia(sessionId); true }
+    AsyncFunction("getMediaStats") { sessionId: String, promise: Promise ->
+      WebRtcEngine.getInstance().getStats(sessionId) { stats ->
+        if (stats == null) promise.resolve(null) else promise.resolve(stats)
+      }
+    }
 
     OnActivityDestroys { clearPendingConsent() }
     OnDestroy {

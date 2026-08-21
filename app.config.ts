@@ -39,6 +39,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       'expo-camera',
       { recordAudioAndroid: false, barcodeScannerEnabled: true },
     ],
+    './plugins/withPip',
   ],
   extra: {
     ...config.extra,

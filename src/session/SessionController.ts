@@ -53,7 +53,7 @@ export class SessionController {
     if (this.state.type === 'Unpaired' || this.state.type === 'Error' || isBasePairedState(this.state)) this.setState(this.baseState());
   }); }
   deactivatePair(): Promise<void> { return this.enqueue(async () => { this.clearTimeout(); await this.pendingStore.clear().catch(() => undefined); await this.control.deactivate(); this.pair = null; this.lastAvailability = { kind: 'inactive' }; this.setState({ type: 'Unpaired' }); }); }
-  updateAvailability(snapshot: AvailabilitySnapshot): void { this.lastAvailability = snapshot; if (this.pair && isBasePairedState(this.state)) this.setState(this.baseState()); }
+  updateAvailability(snapshot: AvailabilitySnapshot): void { this.lastAvailability = snapshot; if (this.pair && (isBasePairedState(this.state) || this.state.type === 'Error')) this.setState(this.baseState()); }
 
   requestScreen(): Promise<void> { return this.enqueue(async () => {
     if (this.state.type !== 'PairedAvailable') throw new Error('The trusted partner is not currently available.');
@@ -83,7 +83,15 @@ export class SessionController {
     await this.control.send(type, payload);
   }); }
 
-  clearError(): void { if (this.state.type === 'Error' && this.pair) this.setState(this.baseState()); }
+  clearError(): Promise<void> { return this.enqueue(async () => {
+    if (this.state.type !== 'Error' || !this.pair) return;
+    this.clearTimeout();
+    await this.pendingStore.clear().catch(() => undefined);
+    await this.control.close().catch(() => undefined);
+    this.setState(this.baseState());
+  }); }
+  /** User-visible retry: clear error and return to accurate paired state (available vs offline). */
+  recover(): Promise<void> { return this.clearError(); }
   dispose(): void { this.unsubscribeControl(); this.clearTimeout(); this.mediaListeners.clear(); }
 
   private failConnectedSession(expectedSessionId: string, reason: 'capture_failed' | 'capture_revoked' | 'media_failed'): Promise<void> { return this.enqueue(async () => {
@@ -117,6 +125,12 @@ export class SessionController {
       if (remaining <= 0 || remaining > CONTROL_REQUEST_TIMEOUT_MS + 5_000) { await this.control.send('SESSION_ERROR', { reason: 'timeout' }).catch(() => undefined); await this.control.close().catch(() => undefined); await this.record('session_timeout'); return; }
       await this.pendingStore.save({ schemaVersion: 1, sessionId: message.sessionId, partnerDeviceId: pair.partnerDeviceId, receivedAt: new Date(this.nowMs()).toISOString(), expiresAt: message.payload.expiresAt });
       this.setState({ type: 'IncomingRequest', pair, sessionId: message.sessionId, expiresAt: message.payload.expiresAt }); this.scheduleTimeout(message.sessionId, 'incoming', remaining); await this.record('session_request_received'); return;
+    }
+    // Stale events from a previous session must never affect a replacement session.
+    // While a session is active (Outgoing/Incoming/Connected), any message with a non-matching sessionId
+    // (except inbound REQUEST_SCREEN which is already handled as busy) is stale and must be ignored.
+    if ((this.state.type === 'OutgoingRequest' || this.state.type === 'IncomingRequest' || this.state.type === 'Connected') && message.sessionId !== this.state.sessionId) {
+      return;
     }
     if (message.type === 'REQUEST_CANCEL' && this.state.type === 'IncomingRequest' && this.state.sessionId === message.sessionId) { this.clearTimeout(); await this.pendingStore.clear().catch(() => undefined); await this.control.close().catch(() => undefined); this.setState(this.baseState(pair)); await this.record('session_cancelled'); return; }
     if (message.type === 'ACCEPT_SCREEN' && this.state.type === 'OutgoingRequest' && this.state.sessionId === message.sessionId) { this.clearTimeout(); this.setState({ type: 'Connected', pair, sessionId: message.sessionId, role: 'requester' }); await this.record('session_accepted'); await this.record('session_connected'); return; }

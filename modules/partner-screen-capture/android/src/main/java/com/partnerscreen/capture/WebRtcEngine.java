@@ -42,9 +42,10 @@ public final class WebRtcEngine {
   public interface SdpResult { void onSuccess(String sdp); void onFailure(); }
   public interface Result { void onResult(boolean success); }
 
-  private static final int SCREEN_SHARE_MIN_BITRATE_BPS = 1_000_000;
-  private static final int SCREEN_SHARE_MAX_BITRATE_BPS = 8_000_000;
+  private static final int SCREEN_SHARE_MIN_BITRATE_BPS = 400_000;
+  private static final int SCREEN_SHARE_MAX_BITRATE_BPS = 2_500_000;
   private static final double SCREEN_SHARE_BITRATE_PRIORITY = 4.0;
+  private static final int SCREEN_SHARE_START_BITRATE_BPS = 800_000;
 
   private static final class CaptureResources {
     final VideoCapturer capturer;
@@ -370,7 +371,10 @@ public final class WebRtcEngine {
     if (sender == null) return;
     try {
       RtpParameters parameters = sender.getParameters();
-      parameters.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION;
+      // LAN screen-share profile: prioritize low latency over max resolution. BALANCED lets WebRTC drop
+      // resolution/FPS/bitrate before accumulating encode/send latency, matching product priorities:
+      // low latency > readable > smooth > resolution.
+      parameters.degradationPreference = RtpParameters.DegradationPreference.BALANCED;
       for (RtpParameters.Encoding encoding : parameters.encodings) {
         encoding.bitratePriority = SCREEN_SHARE_BITRATE_PRIORITY;
         encoding.minBitrateBps = SCREEN_SHARE_MIN_BITRATE_BPS;
@@ -380,6 +384,64 @@ public final class WebRtcEngine {
       sender.setParameters(parameters);
     } catch (RuntimeException ignored) {}
   }
+
+  public void getStats(String sessionId, StatsCallback callback) {
+    final PeerConnection pc;
+    synchronized (lock) {
+      if (peerConnection == null || mediaSessionId == null || !mediaSessionId.equals(sessionId)) {
+        callback.onStats(null);
+        return;
+      }
+      pc = peerConnection;
+    }
+    try {
+      pc.getStats(new org.webrtc.RTCStatsCollectorCallback() {
+        @Override public void onStatsDelivered(org.webrtc.RTCStatsReport report) {
+          try {
+            Map<String, Object> sanitized = new HashMap<>();
+            sanitized.put("type", "media_stats");
+            sanitized.put("sessionId", sessionId);
+            // Emit only sanitized numeric metrics, never full IP/SDP/candidate bodies.
+            for (org.webrtc.RTCStats stat : report.getStatsMap().values()) {
+              if ("outbound-rtp".equals(stat.getType()) && "video".equals(stat.getMembers().get("kind"))) {
+                Object bytesSent = stat.getMembers().get("bytesSent");
+                Object packetsLost = stat.getMembers().get("packetsLost");
+                Object framesEncoded = stat.getMembers().get("framesEncoded");
+                Object framesPerSecond = stat.getMembers().get("framesPerSecond");
+                Object totalEncodeTime = stat.getMembers().get("totalEncodeTime");
+                if (bytesSent instanceof Number) sanitized.put("bytesSent", ((Number) bytesSent).longValue());
+                if (packetsLost instanceof Number) sanitized.put("packetsLost", ((Number) packetsLost).longValue());
+                if (framesEncoded instanceof Number) sanitized.put("framesEncoded", ((Number) framesEncoded).longValue());
+                if (framesPerSecond instanceof Number) sanitized.put("framesPerSecond", ((Number) framesPerSecond).doubleValue());
+                if (totalEncodeTime instanceof Number) sanitized.put("totalEncodeTime", ((Number) totalEncodeTime).doubleValue());
+              }
+              if ("remote-inbound-rtp".equals(stat.getType())) {
+                Object jitter = stat.getMembers().get("jitter");
+                Object roundTripTime = stat.getMembers().get("roundTripTime");
+                if (jitter instanceof Number) sanitized.put("jitter", ((Number) jitter).doubleValue());
+                if (roundTripTime instanceof Number) sanitized.put("roundTripTime", ((Number) roundTripTime).doubleValue());
+              }
+              if ("candidate-pair".equals(stat.getType())) {
+                Object state = stat.getMembers().get("state");
+                Object nominated = stat.getMembers().get("nominated");
+                if ("succeeded".equals(state) && Boolean.TRUE.equals(nominated)) {
+                  // Only expose sanitized pair type, not IPs.
+                  sanitized.put("candidatePairState", "succeeded");
+                }
+              }
+            }
+            callback.onStats(sanitized);
+          } catch (Exception ignored) {
+            callback.onStats(null);
+          }
+        }
+      }, null);
+    } catch (Exception ignored) {
+      callback.onStats(null);
+    }
+  }
+
+  public interface StatsCallback { void onStats(Map<String, Object> stats); }
 
   private boolean isCurrentPeerLocked(String sessionId, long generation) {
     return generation == peerGeneration && mediaSessionId != null && mediaSessionId.equals(sessionId);

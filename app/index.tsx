@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MAX_DEVICE_NAME_LENGTH } from '../src/domain/identity/LocalDeviceIdentity';
 import { useAvailability } from '../src/presentation/useAvailability';
 import { useLocalIdentity } from '../src/presentation/useLocalIdentity';
@@ -12,6 +13,7 @@ import { useScreenCapture } from '../src/presentation/useScreenCapture';
 import { useSession } from '../src/presentation/useSession';
 
 export default function HomeScreen() {
+  const insets = useSafeAreaInsets();
   const identityState = useLocalIdentity();
   const pairing = usePairing();
   const availability = useAvailability();
@@ -45,7 +47,7 @@ export default function HomeScreen() {
   ]);
 
   return (
-    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+    <ScrollView contentContainerStyle={[styles.container, { paddingTop: Math.max(22, insets.top + 12), paddingBottom: Math.max(44, insets.bottom + 20), paddingLeft: Math.max(22, insets.left + 12), paddingRight: Math.max(22, insets.right + 12) } ]} keyboardShouldPersistTaps="handled">
       <Text accessibilityRole="header" style={styles.title}>PartnerScreen</Text>
       <Text style={styles.subtitle}>Private trusted-partner screen sharing</Text>
 
@@ -108,22 +110,30 @@ export default function HomeScreen() {
         {session.state.type === 'Connected' && session.state.role === 'sharer' ? <View style={styles.section}>
           <Text accessibilityRole="header" style={styles.label}>Sharing phone</Text>
           <Text accessibilityLiveRegion="polite" style={capture.state.type === 'capturing' ? styles.available : styles.help}>{capture.state.type === 'capturing' ? 'Android screen capture active' : capture.state.type === 'requesting_consent' ? 'Waiting for Android consent…' : capture.state.type === 'starting' ? 'Starting screen capture…' : 'Capture not active'}</Text>
-          <Text accessibilityLiveRegion="polite" style={styles.help}>{media.state.type === 'reconnecting' ? 'Private video interrupted. Reconnecting with bounded retries; LIVE is off.' : media.state.type === 'publishing' ? 'Private WebRTC video offer sent over the authenticated control session.' : media.state.type === 'negotiating' ? 'Negotiating private LAN video…' : 'No audio, recording, remote control, TURN or cloud relay.'}</Text>
+          <Text accessibilityLiveRegion="polite" style={styles.help}>{(media.state as any).type === 'reconnecting' && (media.state as any).sessionId === (session.state as any).sessionId ? `Private video reconnecting — attempt ${(media.state as any).attempt}/3. LIVE is off.` : (media.state as any).type === 'publishing' ? 'Private WebRTC video offer sent over the authenticated control session.' : (media.state as any).type === 'negotiating' ? 'Negotiating private LAN video…' : ((media.state as any).type === 'publishing' || (media.state as any).type === 'remote_track_attached') && (media.state as any).quality === 'degraded' ? 'Connection degraded — reducing quality to preserve latency.' : 'No audio, recording, remote control, TURN or cloud relay.'}</Text>
           {capture.state.type === 'idle' ? <Pressable accessibilityRole="button" accessibilityLabel="Choose screen to share" accessibilityHint="Opens Android system screen-capture consent." onPress={() => { void capture.requestForConnectedSharer(); }} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>Choose screen to share</Text></Pressable> : null}
+          {capture.state.type === 'error' ? <Pressable accessibilityRole="button" accessibilityLabel="Retry screen sharing" onPress={() => { void session.recover().catch(() => undefined); }} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}><Text style={styles.secondaryText}>Retry</Text></Pressable> : null}
           <Pressable accessibilityRole="button" accessibilityLabel="Stop sharing" accessibilityHint="Stops capture, private video and the active session." onPress={() => { void capture.stopSharing(); }} style={({ pressed }) => [styles.danger, pressed && styles.pressed]}><Text style={styles.dangerText}>Stop sharing</Text></Pressable>
         </View> : null}
 
         {session.state.type === 'Connected' && session.state.role === 'requester' ? <View style={styles.section}>
           <Text accessibilityRole="header" style={styles.label}>Viewing phone</Text>
-          <Text accessibilityLiveRegion="polite" style={styles.help}>{media.state.type === 'reconnecting' ? 'Private video interrupted. Reconnecting with bounded retries; not LIVE.' : media.state.type === 'negotiating' ? 'Negotiating private LAN video…' : media.state.type === 'remote_track_attached' ? 'Remote video track attached. Open the dedicated viewer.' : media.state.type === 'live' ? 'The remote screen is LIVE in the dedicated viewer.' : 'Waiting for the sharing phone.'}</Text>
+          <Text accessibilityLiveRegion="polite" style={styles.help}>{media.state.type === 'reconnecting' && media.state.sessionId === session.state.sessionId ? `Private video interrupted. Reconnecting — attempt ${media.state.attempt}/3; not LIVE.` : media.state.type === 'negotiating' ? 'Negotiating private LAN video…' : media.state.type === 'remote_track_attached' ? 'Remote video track attached. Open the dedicated viewer.' : media.state.type === 'live' && media.state.sessionId === session.state.sessionId ? 'The remote screen is LIVE in the dedicated viewer.' : media.state.type === 'error' ? 'Video connection failed — use Retry below.' : 'Waiting for the sharing phone.'}</Text>
           {media.state.type === 'live' && media.state.sessionId === session.state.sessionId ? <Text accessibilityRole="alert" accessibilityLiveRegion="assertive" style={styles.live}>LIVE — remote screen visible</Text> : null}
+          {media.state.type === 'reconnecting' && media.state.sessionId === session.state.sessionId ? <Text accessibilityLiveRegion="polite" style={styles.help}>LIVE is off while bounded LAN recovery runs. Attempt {media.state.attempt}/3.</Text> : null}
           <Pressable accessibilityRole="button" accessibilityLabel="Open remote screen viewer" accessibilityHint="Opens the remote screen on its own full-screen view." onPress={() => router.push('/viewer')} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>Open viewer</Text></Pressable>
+          {media.state.type === 'error' ? <Pressable accessibilityRole="button" accessibilityLabel="Retry video connection" onPress={() => { void session.recover().catch(() => undefined); }} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}><Text style={styles.secondaryText}>Retry</Text></Pressable> : null}
           <Pressable accessibilityRole="button" accessibilityLabel="Stop screen session" accessibilityHint="Ends the authenticated screen-sharing session." onPress={() => { void session.endSession(); }} style={({ pressed }) => [styles.danger, pressed && styles.pressed]}><Text style={styles.dangerText}>Stop session</Text></Pressable>
         </View> : null}
 
         {capture.state.type === 'error' ? <Text accessibilityRole="alert" style={styles.error}>{capture.state.message}</Text> : null}
         {media.state.type === 'error' ? <Text accessibilityRole="alert" style={styles.error}>{media.state.message}</Text> : null}
-        {session.state.type === 'Error' ? <Text accessibilityRole="alert" style={styles.error}>{session.state.message}</Text> : null}
+        {session.state.type === 'Error' ? <>
+          <Text accessibilityRole="alert" style={styles.error}>{session.state.message}</Text>
+          <Text style={styles.help}>A failed session has been torn down safely. Pairing is preserved. If the partner is still available, you can request again without restarting the app.</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="Retry after session error" accessibilityHint="Clears the failed session and returns to the accurate paired state (available or offline)." onPress={() => { void session.recover().catch(() => undefined); }} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>Retry — clear error</Text></Pressable>
+          {available ? <Pressable accessibilityRole="button" accessibilityLabel="Request partner screen again" onPress={() => { void (async () => { await session.recover().catch(() => undefined); await session.requestScreen().catch(() => undefined); })(); }} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}><Text style={styles.secondaryText}>Request Screen again</Text></Pressable> : <Text style={styles.help}>Partner is currently offline. Retry will return to offline paired state.</Text>}
+        </> : null}
         <Pressable accessibilityRole="button" accessibilityLabel="Forget trusted partner" accessibilityHint="Ends active sharing and permanently removes the saved trusted relationship." onPress={forgetPartner} style={({ pressed }) => [styles.danger, pressed && styles.pressed]}><Text style={styles.dangerText}>Forget partner</Text></Pressable>
       </View> : null}
 

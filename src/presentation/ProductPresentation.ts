@@ -14,6 +14,7 @@ export type ProductPhase =
   | 'sharing'
   | 'connecting_video'
   | 'waiting_first_frame'
+  | 'degraded'
   | 'reconnecting'
   | 'live'
   | 'error';
@@ -39,7 +40,7 @@ export function deriveProductPresentation(input: ProductPresentationInput): Prod
   const { session, capture, media } = input;
 
   if (session.type === 'Error' || capture.type === 'error' || media.type === 'error') {
-    return presentation('error', 'Session stopped with an error', 'PartnerScreen failed closed. Review the sanitized message below, then retry from an available partner.', 'danger');
+    return presentation('error', 'Session stopped — tap Retry when ready', 'PartnerScreen failed closed. Review the sanitized message below, then use Retry to return to the paired state and request again if the partner is available.', 'danger');
   }
 
   switch (session.type) {
@@ -55,7 +56,10 @@ export function deriveProductPresentation(input: ProductPresentationInput): Prod
       return presentation('incoming_request', 'Incoming screen request', 'Accept or decline explicitly. Accepting still requires Android system screen-capture consent.', 'attention');
     case 'Connected':
       if (media.type === 'reconnecting' && media.sessionId === session.sessionId) {
-        return presentation('reconnecting', 'Reconnecting private video', 'LIVE is off while PartnerScreen performs bounded private-LAN recovery.', 'attention');
+        return presentation('reconnecting', `Reconnecting private video — attempt ${media.attempt}/3`, 'LIVE is off while PartnerScreen performs bounded private-LAN recovery.', 'attention');
+      }
+      if ((media.type === 'publishing' || media.type === 'remote_track_attached') && media.sessionId === session.sessionId && (media as { quality?: string }).quality === 'degraded') {
+        return presentation('degraded', 'Connection degraded', 'Private video quality is degraded. PartnerScreen will attempt bounded recovery before declaring the session failed.', 'attention');
       }
 
       if (session.role === 'sharer') {
