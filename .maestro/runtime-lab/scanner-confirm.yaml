@@ -4,5 +4,5 @@ appId: com.partnerscreen.app
 - extendedWaitUntil:
     visible: "Authenticated phone"
     timeout: 15000
-- assertVisible: "LabAlice"
+- assertVisible: "${EXPECTED_PARTNER}"
 - tapOn: "Confirm this phone"
