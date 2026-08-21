@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - ci/android-apk
   pull_request:
     branches:
       - main
