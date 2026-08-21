@@ -1,10 +1,11 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { ActivityIndicator, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
 import { PartnerRemoteVideoView } from '../modules/partner-screen-capture';
 import { useMediaSession } from '../src/presentation/useMediaSession';
 import { useSession } from '../src/presentation/useSession';
+import { appServices } from '../src/application/AppServices';
 
 export default function ViewerScreen() {
   const session = useSession();
@@ -22,18 +23,28 @@ export default function ViewerScreen() {
   // so WebRTC's first-frame callback is earned again instead of inheriting stale LIVE state.
   const rendererEpoch = rendererTrackState?.trackEpoch ?? 0;
 
-  const returnHome = () => {
-    router.replace('/');
-  };
+  const [isPip, setIsPip] = useState(false);
+  const videoSizeRef = useRef({ width: 1280, height: 720 });
 
-  const stopSession = async () => {
+  const returnHome = useCallback(() => {
+    router.replace('/');
+  }, []);
+
+  const stopSession = useCallback(async () => {
     await session.endSession().catch(() => undefined);
     returnHome();
-  };
+  }, [session, returnHome]);
+
+  const enterPip = useCallback(async () => {
+    if (!appServices.pipPort.supportsPip()) return;
+    const { width, height } = videoSizeRef.current;
+    const ok = await appServices.pipPort.enterPip(width, height).catch(() => false);
+    if (ok) void appServices.diagnosticsRepository.append('pip_entered').catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (!requesterSessionId) returnHome();
-  }, [requesterSessionId]);
+  }, [requesterSessionId, returnHome]);
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -42,6 +53,53 @@ export default function ViewerScreen() {
     });
     return () => subscription.remove();
   });
+
+  // Viewer keep-awake: only while dedicated viewer is active for a valid requester session.
+  // FLAG_KEEP_SCREEN_ON is scoped to the viewer Activity/window and released on unmount/session end.
+  useEffect(() => {
+    if (!requesterSessionId) return;
+    void appServices.diagnosticsRepository.append('viewer_opened').catch(() => undefined);
+    void appServices.keepAwakePort.enable().then(() => {
+      void appServices.diagnosticsRepository.append('keep_awake_enabled').catch(() => undefined);
+    });
+    return () => {
+      void appServices.keepAwakePort.disable().then(() => {
+        void appServices.diagnosticsRepository.append('keep_awake_disabled').catch(() => undefined);
+      });
+      void appServices.diagnosticsRepository.append('viewer_closed').catch(() => undefined);
+    };
+  }, [requesterSessionId]);
+
+  // PiP mode tracking for diagnostics and to keep video rendering in PiP while session active.
+  useEffect(() => {
+    const sub = appServices.pipPort.subscribe((event) => {
+      setIsPip(event.isInPictureInPictureMode);
+      void appServices.diagnosticsRepository.append(event.isInPictureInPictureMode ? 'pip_entered' : 'pip_exited').catch(() => undefined);
+    });
+    return () => sub();
+  }, []);
+
+  // Auto-enter PiP when viewer is live and app goes background (Android appropriate, not surprising navigation).
+  // If session is live and user backgrounds, opportunistically enter PiP so remote video continues.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'background' && requesterSessionId && media.state.type === 'live' && media.state.sessionId === requesterSessionId) {
+        void enterPip();
+      }
+      if (state === 'active') void appServices.diagnosticsRepository.append('app_foregrounded').catch(() => undefined);
+      if (state === 'background') void appServices.diagnosticsRepository.append('app_backgrounded').catch(() => undefined);
+    });
+    return () => sub.remove();
+  }, [requesterSessionId, media.state, enterPip]);
+
+  // If session ends/fails while in PiP, ensure we exit PiP or show terminal: viewer will unmount via returnHome,
+  // which on Android will automatically leave PiP when the activity is finished.
+  useEffect(() => {
+    if (!requesterSessionId && isPip) {
+      // Session ended while in PiP: diagnostics already have viewer_closed via above; ensure PiP exits.
+      // No explicit native exit needed; returning home will handle.
+    }
+  }, [requesterSessionId, isPip]);
 
   if (!requesterSessionId) {
     return (
@@ -58,9 +116,13 @@ export default function ViewerScreen() {
       ? 'Preparing video…'
       : media.state.type === 'reconnecting' && media.state.sessionId === requesterSessionId
         ? `Reconnecting… ${media.state.attempt}/3`
-        : media.state.type === 'error'
-          ? media.state.message
-          : 'Connecting…';
+        : media.state.type === 'negotiating' && media.state.sessionId === requesterSessionId
+          ? 'Connecting private video…'
+          : media.state.type === 'error'
+            ? media.state.message
+            : 'Connecting…';
+
+  const canEnterPip = appServices.pipPort.supportsPip() && rendererReady && !!requesterSessionId;
 
   return (
     <View accessibilityLabel="Trusted partner screen viewer" style={styles.root}>
@@ -88,17 +150,34 @@ export default function ViewerScreen() {
           <View accessibilityLiveRegion="polite" style={styles.statusPill}>
             <Text style={styles.statusText}>{status}</Text>
           </View>
+          {canEnterPip ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Enter Picture-in-Picture"
+              accessibilityHint="Continues the remote video in a floating window while the session remains active."
+              onPress={() => { void enterPip(); }}
+              style={({ pressed }) => [styles.pipButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.pipButtonText}>PiP</Text>
+            </Pressable>
+          ) : null}
         </View>
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Stop screen session"
-          accessibilityHint="Ends the private screen-sharing session and returns home."
-          onPress={() => { void stopSession(); }}
-          style={({ pressed }) => [styles.stopButton, pressed && styles.pressed]}
-        >
-          <Text style={styles.stopButtonText}>Stop session</Text>
-        </Pressable>
+        {!isPip ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Stop screen session"
+            accessibilityHint="Ends the private screen-sharing session and returns home."
+            onPress={() => { void stopSession(); }}
+            style={({ pressed }) => [styles.stopButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.stopButtonText}>Stop session</Text>
+          </Pressable>
+        ) : (
+          <View style={styles.pipHint}>
+            <Text style={styles.pipHintText}>Tap to return</Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -111,10 +190,14 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, backgroundColor: '#000', padding: 24 },
   centerText: { color: '#fff', fontSize: 16, fontWeight: '700', textAlign: 'center' },
   overlay: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 18, paddingBottom: 24 },
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   statusPill: { minHeight: 40, justifyContent: 'center', borderRadius: 20, paddingHorizontal: 14, backgroundColor: 'rgba(0,0,0,0.72)' },
   statusText: { color: '#fff', fontSize: 14, fontWeight: '800' },
+  pipButton: { minHeight: 40, justifyContent: 'center', alignItems: 'center', borderRadius: 20, paddingHorizontal: 14, backgroundColor: 'rgba(255,255,255,0.18)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)' },
+  pipButtonText: { color: '#fff', fontSize: 14, fontWeight: '800' },
   stopButton: { minHeight: 52, justifyContent: 'center', alignItems: 'center', alignSelf: 'center', borderRadius: 26, paddingHorizontal: 24, backgroundColor: 'rgba(150,0,0,0.88)' },
   stopButtonText: { color: '#fff', fontSize: 17, fontWeight: '900' },
+  pipHint: { alignSelf: 'center', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: 'rgba(0,0,0,0.6)' },
+  pipHintText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   pressed: { opacity: 0.72 },
 });

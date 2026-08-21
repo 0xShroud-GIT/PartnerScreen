@@ -69,6 +69,14 @@ export class MediaSessionController {
   getSnapshot = (): MediaSessionState => this.state;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   reconcile(): Promise<void> { return this.enqueue(() => this.syncAuthority()); }
+  clearError(): Promise<void> { return this.enqueue(async () => {
+    if (this.state.type !== 'error') return;
+    this.clearRecovery(true);
+    // After a failed media session, return to idle so a replacement session can start clean.
+    // syncAuthority will also converge to idle when the product session is not Connected; this covers the
+    // manual retry path where the SessionController has already returned to Paired*.
+    this.setState({ type: 'idle' });
+  }); }
 
   rendererFirstFrame(sessionId: string, rendererEpoch: number): Promise<void> { return this.enqueue(async () => {
     // LIVE is entered only for the exact current session AND the exact current renderer/track epoch.

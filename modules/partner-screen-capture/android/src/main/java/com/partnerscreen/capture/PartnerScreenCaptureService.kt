@@ -27,8 +27,11 @@ class PartnerScreenCaptureService : Service() {
     private const val CHANNEL_ID = "partnerscreen_screen_sharing"
     private const val NOTIFICATION_ID = 7305
     private const val ACTIVITY_RESULT_MISSING = Int.MIN_VALUE
-    private const val CAPTURE_LONG_EDGE_PX = 1600.0
-    private const val CAPTURE_FPS = 30
+    // LAN screen-sharing profile optimized for low latency over max resolution:
+    // 1280 long edge and 20 fps keep text readable while letting WebRTC's congestion control
+    // reduce resolution/FPS/bitrate before accumulating latency.
+    private const val CAPTURE_LONG_EDGE_PX = 1280.0
+    private const val CAPTURE_FPS = 20
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())

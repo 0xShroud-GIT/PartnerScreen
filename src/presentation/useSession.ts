@@ -17,7 +17,12 @@ export function useSession() {
     },
     declineRequest: () => appServices.sessionController.declineRequest(),
     cancelRequest: () => appServices.sessionController.cancelRequest(),
-    endSession: () => appServices.sessionController.endSession(),
+    endSession: (expectedSessionId?: string) => appServices.sessionController.endSession(expectedSessionId),
     clearError: () => appServices.sessionController.clearError(),
+    recover: async () => {
+      await appServices.sessionController.clearError().catch(() => undefined);
+      await appServices.mediaSessionController.clearError().catch(() => undefined);
+      await appServices.screenCaptureCoordinator.clearError();
+    },
   };
 }
