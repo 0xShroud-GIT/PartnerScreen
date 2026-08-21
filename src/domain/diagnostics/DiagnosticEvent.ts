@@ -6,6 +6,7 @@ export type DiagnosticEventKind =
   | 'identity_created'
   | 'identity_loaded'
   | 'device_name_updated'
+  | 'identity_validation_rejected'
   | 'identity_storage_error'
   | 'pairing_started'
   | 'pairing_scanned'
@@ -57,7 +58,7 @@ export interface DiagnosticEvent {
 
 const VALID_KINDS = new Set<DiagnosticEventKind>([
   'app_started', 'identity_created', 'identity_loaded', 'device_name_updated',
-  'identity_storage_error', 'pairing_started', 'pairing_scanned', 'pairing_cancelled',
+  'identity_validation_rejected', 'identity_storage_error', 'pairing_started', 'pairing_scanned', 'pairing_cancelled',
   'pairing_failed', 'pairing_crypto_selftest_failed', 'pairing_crypto_failed',
   'pairing_protocol_failed', 'pairing_transport_failed', 'pairing_storage_failed',
   'pairing_completed', 'pairing_revoked', 'availability_started',

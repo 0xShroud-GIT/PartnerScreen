@@ -62,7 +62,7 @@ export default function DiagnosticsScreen() {
       {!loading && !identityLoading && !error ? (
         <>
           <View accessibilityLabel="Sanitized diagnostic report" style={styles.reportBox}>
-            <Text selectable style={styles.report}>{report}</Text>
+            <Text style={styles.report}>{report}</Text>
           </View>
           <Pressable
             accessibilityRole="button"

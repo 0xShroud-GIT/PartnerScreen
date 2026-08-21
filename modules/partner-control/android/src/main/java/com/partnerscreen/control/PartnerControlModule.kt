@@ -196,16 +196,31 @@ class PartnerControlModule : Module() {
   private fun activeWifiEndpoint(destination: Inet4Address? = null): WifiEndpoint? {
     val context = appContext.reactContext ?: return null
     val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return null
-    val active = connectivity.activeNetwork ?: return null
-    val capabilities = connectivity.getNetworkCapabilities(active) ?: return null
-    if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return null
-    if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return null
-    if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) return null
-    val links = connectivity.getLinkProperties(active) ?: return null
-    if (destination != null && !hasRouteTo(links, destination)) return null
-    val address = links.linkAddresses.asSequence().map { it.address }.filterIsInstance<Inet4Address>()
-      .firstOrNull { !it.isLoopbackAddress && isPrivateIpv4(it) } ?: return null
-    return WifiEndpoint(active, address)
+
+    fun endpointFor(network: Network): WifiEndpoint? {
+      val capabilities = connectivity.getNetworkCapabilities(network) ?: return null
+      if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return null
+      if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return null
+      if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) return null
+      val links = connectivity.getLinkProperties(network) ?: return null
+      if (destination != null && !hasRouteTo(links, destination)) return null
+      val address = links.linkAddresses.asSequence().map { it.address }.filterIsInstance<Inet4Address>()
+        .firstOrNull { !it.isLoopbackAddress && isPrivateIpv4(it) } ?: return null
+      return WifiEndpoint(network, address)
+    }
+
+    val active = connectivity.activeNetwork
+    if (active != null) endpointFor(active)?.let { return it }
+
+    // Compatibility fallback: Android can keep cellular as the default network while a usable
+    // local Wi-Fi network is still connected. Control must use the same private-Wi-Fi selection
+    // behavior as pairing instead of incorrectly reporting the trusted partner offline.
+    @Suppress("DEPRECATION")
+    return connectivity.allNetworks
+      .asSequence()
+      .filter { it != active }
+      .mapNotNull { endpointFor(it) }
+      .firstOrNull()
   }
 
   private fun hasRouteTo(links: LinkProperties, destination: Inet4Address): Boolean = links.routes.any { it.matches(destination) }
