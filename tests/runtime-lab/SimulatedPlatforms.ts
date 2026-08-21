@@ -2,10 +2,11 @@ import type { ScreenCaptureNativeEvent, ScreenCapturePort } from '../../src/capt
 import type { SanitizedMediaStats } from '../../src/media/MediaStats';
 import type { WebRtcMediaNativeEvent, WebRtcMediaPort } from '../../src/media/WebRtcMediaPort';
 import type { RequestNotificationPort } from '../../src/platform/notifications/ExpoRequestNotification';
+import type { NotificationPermissionState } from '../../src/request/NotificationPermission';
 import { VirtualClock } from './VirtualClock';
 import { VirtualNetwork } from './VirtualNetwork';
 
-export type SimulatedNotificationPermission = 'unknown' | 'granted' | 'denied' | 'dismissed' | 'channel_disabled';
+export type SimulatedNotificationPermission = 'unknown' | 'granted' | 'denied' | 'dismissed' | 'channel_disabled' | 'requestable' | 'prompting';
 
 export class SimulatedNotificationPort implements RequestNotificationPort {
   permission: SimulatedNotificationPermission = 'granted';
@@ -20,11 +21,28 @@ export class SimulatedNotificationPort implements RequestNotificationPort {
   async ensurePermission(): Promise<boolean> {
     if (this.permission === 'granted') return true;
     this.permissionRequests += 1;
-    if (this.permission === 'unknown' || this.permission === 'dismissed') this.permission = this.nextPromptResult;
+    if (this.permission === 'unknown' || this.permission === 'dismissed' || this.permission === 'requestable') this.permission = this.nextPromptResult;
     return this.permission === 'granted';
   }
 
-  async showRequestNotification(sessionId: string): Promise<boolean> {
+  async readPermissionState(): Promise<NotificationPermissionState> {
+    if (this.permission === 'granted') return 'granted';
+    if (this.permission === 'denied' || this.permission === 'channel_disabled') return 'denied';
+    if (this.permission === 'dismissed') return 'dismissed';
+    if (this.permission === 'unknown') return 'unknown';
+    if (this.permission === 'requestable' || this.permission === 'prompting') return 'requestable';
+    return 'unknown';
+  }
+
+  async requestPermissionFromForeground(): Promise<NotificationPermissionState> {
+    this.permissionRequests += 1;
+    if (this.permission === 'unknown' || this.permission === 'requestable' || this.permission === 'dismissed') {
+      this.permission = this.nextPromptResult as SimulatedNotificationPermission;
+    }
+    return this.readPermissionState();
+  }
+
+  async showRequestNotification(sessionId: string, _partnerName?: string): Promise<boolean> {
     this.showAttempts.push(sessionId);
     if (this.permission !== 'granted') return false;
     this.shownSessionId = sessionId;
