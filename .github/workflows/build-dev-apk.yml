@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - ci/android-apk
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
