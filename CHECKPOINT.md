@@ -1,48 +1,50 @@
 # PartnerScreen Checkpoint
 
 **Updated:** 2026-08-21  
-**Phase:** Mission 0 correction pass — Stabilize current PartnerScreen  
-**Working branch:** `arena/01a02594-partnerscreen` (session-fixed; requested `v2/gate0-stabilization` cannot be created in this Arena session)  
-**Base:** `5e6f70a5fe874525e6f7a6dbd24fc08b591fa859` (`main`)
+**Phase:** P0 runtime repair (source-only)  
+**Working branch:** `arena/01a02681-partnerscreen`  
+**Base:** `1d09ae4dfec7f0d998b02bb7b92a89722d2c8f48` (`main`)
 
 ## Current truth
 
-Mission 0 source work plus the five merge-blocker corrections are complete on the session branch. The existing WebRTC fallback is deterministic and truthful at the source/prebuild layer:
+- Native APK compile for `1d09ae4d` was **PASS**.
+- Mission 0Q physical qualification **FAILED** on two Android phones.
+- Source tests are **not** physical proof.
+- Current mission is **P0 runtime repair**. Do not start Mission 1.
 
-- native `getStats(RTCStatsCollectorCallback)` one-arg API
-- absolute initial usable-video deadline (15 seconds)
-- bounded reconnect: requester uses the 5s frame-grace deadline; sharer uses the 8s attempt watchdog
-- Error remains Error until explicit `recoverProductError()` / `clearError()`; availability only updates cached reachability
-- Stop → immediate Start: latest valid `ACTION_START` while stopping is copied and queued; old-session callbacks cannot own the replacement
-- incoming-request taps use `partnerscreen://incoming-request/<uuid>` plus native `OnNewIntent` and Expo Linking; stale IDs do nothing
-- notifier advances desired-generation when the session listener fires; a stale completed show is cleared before the queued generation proceeds; `activeSessionId` is set only after the current show succeeds
-- encoder bitrate warning is shown only for a sharer after a failed sender configure
-- PiP uses actual remote geometry and exits on session end
-- sanitized production media stats plumbed into controller/presentation
+### Observed physical failures (frozen APK `1d09ae4d`)
 
-## Source gate (this commit)
+- app responsiveness/freezing materially worse
+- partner discovery much slower than previously working behavior
+- control connections fail after availability claimed partner was available
+- reconnect/recovery unreliable
+- notification permission prompt does not appear reliably
+- permission had to be granted manually
+- incoming request effectively visible only while app is alive/foreground
+- MediaProjection consent and capture start succeed
+- WebRTC negotiation reaches `remote_track`
+- actual first rendered frame never arrives
+- sessions killed by the 15-second initial-video deadline
+- duplicate `viewer_opened` events
+- duplicate `keep_awake_enabled` events
+- PiP does not work
+- general session lifecycle is buggy
 
-- `npm ci`: PASS (649 packages)
-- `npm run typecheck`: PASS
-- `npm run test:product`: PASS (175/175)
-- `npm run check:contracts`: PASS (13/13)
-- `npm run check:baseline`: PASS
-- `npm run sanitize`: PASS
-- `npm run config:check`: PASS
-- `npm run deps:check`: PASS
-- `CI=1 npx expo prebuild --platform android --no-install`: PASS (`supportsPictureInPicture="true"`)
+`remote_track` proves negotiated receiver-track existence, **not** RTP/decoded/rendered media.
 
-Native compile and physical behavior remain unproven. Prebuild is not a native compile. LIVE still means the first rendered remote frame.
+## Source work on this branch
 
-## Next work
-
-1. Review Mission 0 PR #10. Do not merge unless authorized.
-2. Do **not** start Mission 0Q (APK / Maestro / physical) until this PR is reviewed.
+P0-A through P0-H implemented in source. No APK, Gradle, Expo prebuild, Maestro, emulator, or workflow dispatch was run in this mission.
 
 ## High-risk invariants
 
 - LIVE requires the current renderer/session/track epoch's actual first frame.
-- Pairing survives Error recovery.
+- Pairing survives recoverable media failure.
 - Availability updates must not silently clear Error.
 - No secrets, raw SDP, or full IPs in ordinary diagnostics/notifications.
-- Native compile and physical behavior remain unproven until Mission 0Q.
+- Native compile and physical behavior remain unproven until the next APK.
+
+## Next work
+
+1. Review the P0 runtime-repair PR. Do not merge unless authorized.
+2. Humans build an APK and physically qualify. Do not claim video, discovery speed, background notifications, reconnect, PiP, or freeze fixes until that APK proves them.

@@ -141,3 +141,23 @@ test('media transport snapshot records ICE and renderer events without becoming 
   assert.equal(/192\.168|candidate:|sdp|fingerprint|token/i.test(serialized), false);
   media.dispose();
 });
+
+test('slow getStats samples do not block later ICE/native media events', async () => {
+  class SlowStatsNative extends FakeNative {
+    async getStats(): Promise<SanitizedMediaStats | null> {
+      await new Promise<void>(() => undefined);
+      return null;
+    }
+  }
+  const native = new SlowStatsNative();
+  const media = new MediaSessionController(native, new FakeSession(), new FakeCapture(), new Diagnostics(), new ImmediateScheduler());
+  await settle();
+  native.emit({ type: 'remote_track', sessionId }); await settle();
+  const epoch = (media.getSnapshot() as { trackEpoch: number }).trackEpoch;
+  await media.rendererFirstFrame(sessionId, epoch); await settle();
+  native.emit({ type: 'ice_state', sessionId, iceConnectionState: 'connected', iceGatheringState: 'complete' });
+  await settle();
+  assert.equal(media.getTransportSnapshot().iceConnectionState, 'connected');
+  assert.equal(media.getSnapshot().type, 'live');
+  media.dispose();
+});

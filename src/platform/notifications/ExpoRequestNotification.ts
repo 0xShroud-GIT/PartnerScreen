@@ -1,11 +1,13 @@
 import { PermissionsAndroid, Platform } from 'react-native';
+import { canPromptNotificationPermission, type NotificationPermissionState } from '../../request/NotificationPermission';
 
 export type IncomingRequestOpenEvent = { sessionId: string };
 
 export interface RequestNotificationPort {
   showRequestNotification(sessionId: string, partnerName: string): Promise<boolean>;
   clearRequestNotification(): Promise<boolean>;
-  ensurePermission(): Promise<boolean>;
+  readPermissionState(): Promise<NotificationPermissionState>;
+  requestPermissionFromForeground(): Promise<NotificationPermissionState>;
   consumeLaunchSessionId(): Promise<string | null>;
   subscribeOpened(listener: (sessionId: string) => void): () => void;
 }
@@ -70,13 +72,33 @@ export class ExpoRequestNotification implements RequestNotificationPort {
     }
   }
 
-  async ensurePermission(): Promise<boolean> {
-    if (Platform.OS !== 'android') return false;
+  async readPermissionState(): Promise<NotificationPermissionState> {
+    if (Platform.OS !== 'android') return 'denied';
     const apiLevel = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
-    if (!Number.isFinite(apiLevel) || apiLevel < 33) return true;
+    if (!Number.isFinite(apiLevel) || apiLevel < 33) return 'granted';
     const permission = PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS;
-    if (await PermissionsAndroid.check(permission)) return true;
-    return (await PermissionsAndroid.request(permission)) === PermissionsAndroid.RESULTS.GRANTED;
+    try {
+      if (await PermissionsAndroid.check(permission)) return 'granted';
+      return 'requestable';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  async requestPermissionFromForeground(): Promise<NotificationPermissionState> {
+    const current = await this.readPermissionState();
+    if (current === 'granted') return current;
+    if (!canPromptNotificationPermission(current)) return current;
+    if (Platform.OS !== 'android') return 'denied';
+    const permission = PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS;
+    try {
+      const result = await PermissionsAndroid.request(permission);
+      if (result === PermissionsAndroid.RESULTS.GRANTED) return 'granted';
+      if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) return 'denied';
+      return 'dismissed';
+    } catch {
+      return 'unknown';
+    }
   }
 
   async consumeLaunchSessionId(): Promise<string | null> {
@@ -104,7 +126,8 @@ export class ExpoRequestNotification implements RequestNotificationPort {
 export class NoopRequestNotification implements RequestNotificationPort {
   async showRequestNotification(): Promise<boolean> { return false; }
   async clearRequestNotification(): Promise<boolean> { return false; }
-  async ensurePermission(): Promise<boolean> { return false; }
+  async readPermissionState(): Promise<NotificationPermissionState> { return 'denied'; }
+  async requestPermissionFromForeground(): Promise<NotificationPermissionState> { return 'denied'; }
   async consumeLaunchSessionId(): Promise<string | null> { return null; }
   subscribeOpened(): () => void { return () => undefined; }
 }

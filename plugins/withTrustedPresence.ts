@@ -18,7 +18,6 @@ const withTrustedPresence: ConfigPlugin = (config) => {
           'android:name': 'com.partnerscreen.control.PartnerTrustedPresenceService',
           'android:exported': 'false',
           'android:foregroundServiceType': 'connectedDevice',
-          'android:stopWithTask': 'false',
         },
       });
     }

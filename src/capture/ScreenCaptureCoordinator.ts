@@ -57,16 +57,8 @@ export class ScreenCaptureCoordinator {
       this.setState({ type: 'requesting_consent', sessionId: expectedSessionId });
       await this.record('capture_consent_requested');
 
-      const notificationsAllowed = await this.port.ensureNotificationPermission().catch(() => false);
-      // Stale permission result: the original sharer session must still be authoritative.
-      if (!this.isOwnedSharerSession(expectedSessionId)) { this.setState({ type: 'idle' }); return; }
-      if (!notificationsAllowed) {
-        await this.record('capture_consent_denied');
-        this.setState({ type: 'error', message: 'Notifications must be allowed so PartnerScreen can show the required Stop sharing control.' });
-        await this.session.captureDenied(expectedSessionId, 'notifications_denied');
-        return;
-      }
-
+      // POST_NOTIFICATIONS is not required to start a MediaProjection FGS or accept an in-app request.
+      // ensureNotificationPermission() remains on the capture port for explicit notification setup only.
       const granted = await this.port.requestConsent().catch(() => false);
       // Re-check AFTER the MediaProjection consent await (grant OR denial): an old permission result
       // must never terminate a replacement session.

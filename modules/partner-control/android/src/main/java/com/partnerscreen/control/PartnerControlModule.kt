@@ -142,6 +142,7 @@ class PartnerControlModule : Module() {
       val bytes = frame.toByteArray(StandardCharsets.UTF_8)
       require(bytes.isNotEmpty() && bytes.size <= MAX_FRAME_BYTES) { "Control frame size is invalid." }
       val handle = connections[connectionId] ?: throw IllegalStateException("Control connection is not active.")
+      // executor.submit is the bounded write path; IO pool is separate from accept.
       val write = ioExecutor.submit {
         synchronized(handle.writeLock) {
           val output = DataOutputStream(handle.socket.getOutputStream())

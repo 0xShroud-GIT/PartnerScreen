@@ -7,6 +7,7 @@ import { useMediaSession } from '../src/presentation/useMediaSession';
 import { useSession } from '../src/presentation/useSession';
 import { appServices } from '../src/application/AppServices';
 import { displayedVideoSize, type VideoGeometry } from '../src/platform/pip/videoGeometry';
+import { viewerOwnership } from '../src/presentation/ViewerOwnership';
 
 export default function ViewerScreen() {
   const session = useSession();
@@ -61,11 +62,16 @@ export default function ViewerScreen() {
   // FLAG_KEEP_SCREEN_ON is scoped to the viewer Activity/window and released on unmount/session end.
   useEffect(() => {
     if (!requesterSessionId) return;
-    void appServices.diagnosticsRepository.append('viewer_opened').catch(() => undefined);
-    void appServices.keepAwakePort.enable().then((enabled) => {
-      if (enabled) void appServices.diagnosticsRepository.append('keep_awake_enabled').catch(() => undefined);
-    });
+    const becameOwner = viewerOwnership.claim(requesterSessionId);
+    if (becameOwner) {
+      void appServices.diagnosticsRepository.append('viewer_opened').catch(() => undefined);
+      void appServices.keepAwakePort.enable().then((enabled) => {
+        if (enabled) void appServices.diagnosticsRepository.append('keep_awake_enabled').catch(() => undefined);
+      });
+    }
     return () => {
+      const released = viewerOwnership.release(requesterSessionId);
+      if (!released) return;
       void appServices.keepAwakePort.disable().then((disabled) => {
         if (disabled) void appServices.diagnosticsRepository.append('keep_awake_disabled').catch(() => undefined);
       });
@@ -124,6 +130,10 @@ export default function ViewerScreen() {
             sessionId={requesterSessionId}
             style={styles.video}
             onFirstFrame={(event) => { void media.rendererFirstFrame(event.nativeEvent.sessionId, rendererEpoch); }}
+            onFrameResolution={(event) => {
+              const { width, height, rotation } = event.nativeEvent;
+              setVideoGeometry({ width, height, rotation });
+            }}
           />
         ) : (
           <View style={styles.center}>

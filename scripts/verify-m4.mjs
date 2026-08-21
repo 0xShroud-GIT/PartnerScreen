@@ -1,3 +1,5 @@
+// Static source-marker contract. This proves required files/strings exist.
+// It is not evidence of functional wiring or physical control behavior.
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 const root = process.cwd();

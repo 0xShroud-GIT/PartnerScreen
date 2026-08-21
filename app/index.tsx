@@ -11,6 +11,7 @@ import { usePairing } from '../src/presentation/usePairing';
 import { deriveProductPresentation } from '../src/presentation/ProductPresentation';
 import { useScreenCapture } from '../src/presentation/useScreenCapture';
 import { useSession } from '../src/presentation/useSession';
+import { appServices } from '../src/application/AppServices';
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
@@ -121,7 +122,7 @@ export default function HomeScreen() {
           <Text accessibilityLiveRegion="polite" style={styles.help}>{media.state.type === 'reconnecting' && media.state.sessionId === session.state.sessionId ? `Private video interrupted. Reconnecting — attempt ${media.state.attempt}/3; not LIVE.` : media.state.type === 'negotiating' ? 'Negotiating private LAN video…' : media.state.type === 'remote_track_attached' ? 'Remote video track attached. Open the dedicated viewer.' : media.state.type === 'live' && media.state.sessionId === session.state.sessionId ? 'The remote screen is LIVE in the dedicated viewer.' : media.state.type === 'error' ? 'Video connection failed — use Retry below.' : 'Waiting for the sharing phone.'}</Text>
           {media.state.type === 'live' && media.state.sessionId === session.state.sessionId ? <Text accessibilityRole="alert" accessibilityLiveRegion="assertive" style={styles.live}>LIVE — remote screen visible</Text> : null}
           {media.state.type === 'reconnecting' && media.state.sessionId === session.state.sessionId ? <Text accessibilityLiveRegion="polite" style={styles.help}>LIVE is off while bounded LAN recovery runs. Attempt {media.state.attempt}/3.</Text> : null}
-          <Pressable accessibilityRole="button" accessibilityLabel="Open remote screen viewer" accessibilityHint="Opens the remote screen on its own full-screen view." onPress={() => router.push('/viewer')} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>Open viewer</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Open remote screen viewer" accessibilityHint="Opens the remote screen on its own full-screen view." onPress={() => { if (!requesterSessionId) return; router.push('/viewer'); }} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>Open viewer</Text></Pressable>
           {media.state.type === 'error' ? <Pressable accessibilityRole="button" accessibilityLabel="Retry video connection" onPress={() => { void session.recover().catch(() => undefined); }} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}><Text style={styles.secondaryText}>Retry</Text></Pressable> : null}
           <Pressable accessibilityRole="button" accessibilityLabel="Stop screen session" accessibilityHint="Ends the authenticated screen-sharing session." onPress={() => { void session.endSession(); }} style={({ pressed }) => [styles.danger, pressed && styles.pressed]}><Text style={styles.dangerText}>Stop session</Text></Pressable>
         </View> : null}

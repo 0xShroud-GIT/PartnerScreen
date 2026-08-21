@@ -1,18 +1,13 @@
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
-import * as Linking from 'expo-linking';
 import { Stack, router } from 'expo-router';
 import { appServices } from '../src/application/AppServices';
-import { parseIncomingRequestSessionId, shouldOpenIncomingRequest } from '../src/request/incomingRequestRoute';
+import { IncomingRequestIngress } from '../src/request/incomingRequestRoute';
+
+const incomingIngress = new IncomingRequestIngress();
 
 function routeIncomingRequest(sessionId: string | null | undefined): void {
-  if (shouldOpenIncomingRequest(appServices.sessionController.getSnapshot(), sessionId)) {
-    router.replace('/');
-  }
-}
-
-function routeIncomingRequestUrl(url: string | null | undefined): void {
-  routeIncomingRequest(parseIncomingRequestSessionId(url));
+  incomingIngress.route(sessionId, appServices.sessionController.getSnapshot(), () => { router.replace('/'); });
 }
 
 export default function RootLayout() {
@@ -23,10 +18,6 @@ export default function RootLayout() {
       if (state === 'active') void appServices.diagnosticsRepository.append('app_foregrounded').catch(() => undefined);
       if (state === 'background') void appServices.diagnosticsRepository.append('app_backgrounded').catch(() => undefined);
     });
-    void Linking.getInitialURL().then(routeIncomingRequestUrl).catch(() => undefined);
-    const linkingSub = Linking.addEventListener('url', (event) => {
-      routeIncomingRequestUrl(event.url);
-    });
     void appServices.requestNotificationPort.consumeLaunchSessionId().then((sessionId) => {
       routeIncomingRequest(sessionId);
     }).catch(() => undefined);
@@ -35,7 +26,6 @@ export default function RootLayout() {
     });
     return () => {
       sub.remove();
-      linkingSub.remove();
       unsubOpened();
     };
   }, []);

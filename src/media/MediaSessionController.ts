@@ -261,6 +261,7 @@ export class MediaSessionController {
       this.clearConnectionDeadline();
       if (recovering) this.scheduleFrameGrace(event.sessionId);
       else this.scheduleFirstFrameDeadline(event.sessionId);
+      await this.record('media_remote_track');
       return;
     }
 
@@ -428,19 +429,27 @@ export class MediaSessionController {
     });
   }
 
+  private statsInFlight = false;
   private scheduleStats(sessionId: string): void {
     this.clearStatsTimer();
     this.statsTimer = this.scheduler.schedule(MEDIA_STATS_POLL_INTERVAL_MS, () => {
       this.statsTimer = null;
-      void this.enqueue(() => this.pullStats(sessionId)).catch(() => undefined);
+      // Telemetry is a side channel: never join the media operation queue.
+      void this.pullStats(sessionId).catch(() => undefined);
     });
   }
 
   private async pullStats(sessionId: string): Promise<void> {
+    if (this.statsInFlight) return;
     if (!this.isCurrentSession(sessionId)) return;
     if (this.state.type !== 'live' && this.state.type !== 'publishing' && this.state.type !== 'remote_track_attached') return;
     if (this.state.sessionId !== sessionId) return;
-    const raw = await this.native.getStats(sessionId).catch(() => null);
+    this.statsInFlight = true;
+    const raw = await Promise.race([
+      this.native.getStats(sessionId).catch(() => null),
+      new Promise<null>((resolve) => { setTimeout(() => resolve(null), 1_200); }),
+    ]).catch(() => null);
+    this.statsInFlight = false;
     const sanitized = sanitizeMediaStats(raw);
     if (sanitized && typeof sanitized.bytesSent === 'number') {
       const measured = measuredBitrateBps(this.previousBytesSent, sanitized.bytesSent, this.nowMs());
@@ -507,13 +516,11 @@ export class MediaSessionController {
       return;
     }
     if (event.type === 'renderer') {
-      this.transport = {
-        ...this.transport,
-        rendererAttached: event.attached,
-        rendererWidth: event.width ?? this.transport.rendererWidth,
-        rendererHeight: event.height ?? this.transport.rendererHeight,
-        rendererRotation: event.rotation ?? this.transport.rendererRotation,
-      };
+      const next: MediaTransportSnapshot = { ...this.transport, rendererAttached: event.attached };
+      if (event.width !== undefined) next.rendererWidth = event.width;
+      if (event.height !== undefined) next.rendererHeight = event.height;
+      if (event.rotation !== undefined) next.rendererRotation = event.rotation;
+      this.transport = next;
     }
   }
   private applyClassification(classification: SanitizedIceClassification): void {
