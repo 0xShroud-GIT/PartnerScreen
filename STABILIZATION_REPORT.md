@@ -1,207 +1,229 @@
 # PartnerScreen Stabilization — Physical Device Findings
 
-**Branch:** `arena/01a024a9-partnerscreen` (from `79ca7f4eda59057451402e35ea06895666d366bc`)  
+**Branch:** `arena/01a024a9-partnerscreen` → rebased onto `a1740d7` (Separate source checks from manual APK qualification)  
+**Previous base:** `79ca7f4` (ATD) → current HEAD `65ce02d` (Fix PiP native hooks)  
 **Date:** 2026-08-21  
-**Baseline tests:** 137 → 155 passing (0 fail)  
-**Static contracts:** M1-M8 + pairing-crypto + autolink = PASSED  
-**Typecheck / baseline / sanitize / config:check / deps:check = PASSED**  
-**Prebuild:** `expo prebuild --clean --platform android` = SUCCESS (manifest `supportsPictureInPicture="true"` verified)  
+**Source gate:** `152 → 155` tests PASS, `typecheck` PASS, `M1-M8` PASS  
+**Prebuild:** `CI=1 npx expo prebuild --platform android --no-install` → `✔ Finished prebuild` (manifest `supportsPictureInPicture="true"` verified)  
+**Native APK:** **NOT RUN** — intentionally not triggered (see CI policy below)  
+
+> **Source and prebuild gates pass. Native Android compilation and physical qualification remain pending.**
+
+---
+
+## CI policy (current main a1740d7)
+
+- **Automatic source gate** (`.github/workflows/source-gate.yml`) runs on `push: main`, `pull_request: main`, `workflow_dispatch`: `npm ci`, `typecheck`, `test:product`, `check:contracts`, `check:baseline`, `sanitize`, `config:check`, `deps:check`, `expo prebuild --no-install`.
+- **Manual APK qualification** (`.github/workflows/build-dev-apk.yml`) is `workflow_dispatch` only (input `run_maestro`). It **must not** run on `push`, `pull_request`, or routine Arena iterations. This policy is preserved in this branch and was **not** reverted during rebase.
+- Verification after rebase: `source-gate.yml` exists, `build-dev-apk.yml` is `workflow_dispatch` only, no automatic heavy build on PR/push.
 
 ---
 
 ## 1. Root-cause summary per finding
 
-| # | Symptom (device) | Root cause (code) | Fix |
+| # | Symptom (device) | Root cause (code) | Fix (this branch) |
 |---|---|---|---|
-| 1 | Poor connection stability | Bitrate 1–8 Mbps + `MAINTAIN_RESOLUTION` caused encoder to hold 1600 px while queueing frames under congestion; no backpressure, fixed 30 fps, no stats. PeerConnection had no LAN-tuned profile. | New LAN profile: 1280 long edge, 20 fps, 0.4–2.5 Mbps (start 0.8 Mbps), `BALANCED` degradation. Allows WebRTC TCC/REMB to cut resolution/FPS/bitrate before latency spikes. Added `getStats` sanitized (bytesSent, packetsLost, jitter, rtt). |
-| 2 | Poor image quality | Opposite side of same trade-off: after congestion, frames were dropped but resolution still forced, causing freezes + late frames. No readable fallback. | Same profile: BALANCED keeps text readable while still allowing downscale; 1280 is sufficient for phone text on LAN, 20 fps smooth enough, lower bitrate reduces packet loss. |
-| 3 | Significant lag / latency | `MAINTAIN_RESOLUTION` prioritizes resolution over latency; 8 Mbps max on Wi-Fi with interference → large send queue, seconds of lag. No frame-gap detection. | `BALANCED` + lower max + 20 fps + `scheduleFrameGrace` (5 s) + bounded reconnect with backoff [750,1500,3000] ms. Degraded quality surfaced before full reconnect. |
-| 4 | Stuck after disconnect / no reconnect option | `SessionController` Error state was terminal: `isBasePairedState` check meant `updateAvailability` never left Error even when partner came back; UI had no Retry; `clearError()` was sync void and didn't close pending/control; `MediaSessionController` stayed in `error`, `ScreenCaptureCoordinator` stayed `error`. No fresh `sessionId` guard. | `updateAvailability` now exits `Error` to `baseState`; `clearError(): Promise<void>` clears timeout/pending/control and returns to accurate PairedAvailable/Offline; `recover()` clears session+media+capture; UI shows “Retry — clear error” + “Request Screen again” when available; diagnostics `media_degraded/reconnect`. Added stale-session guard in `handleMessage`: active mismatched `sessionId` (except `REQUEST_SCREEN` busy) is ignored, never mutates replacement. |
-| 5 | No incoming-request notification while backgrounded | `REQUEST_SCREEN` handling was in-app state only; no `NotificationManager` channel, no `PendingIntent` to bring user to request UI. | New native module `partner-request-notification` (channel `partnerscreen_incoming_request` ID 7306, IMPORTANCE_HIGH, no full-screen intent, tap launches MainActivity with singleTop), JS `IncomingRequestNotifier` subscribes to `SessionController` and shows on `IncomingRequest`, clears on accept/decline/cancel/timeout/connected/expired. Respects `POST_NOTIFICATIONS` (checked, not auto-bypassed). Tests cover show/clear lifecycle. |
-| 6 | No PiP | No manifest `supportsPictureInPicture`, no `enterPictureInPictureMode` handling. | New module `partner-pip` (`RATIONAL` aspect, `PictureInPictureParams`), config plugin `plugins/withPip.ts` survives CNG, viewer has PiP button, auto-enter on background when live (via `AppState`), `onPipModeChanged` diagnostics, video continues because renderer stays attached; Stop remains via return-to-app. |
-| 7 | Viewer dims / screen off | No `FLAG_KEEP_SCREEN_ON` handling; global wake lock discouraged. | New module `partner-keep-awake` (window flag, no `WAKE_LOCK` permission). Viewer `useEffect` enables on `viewer_opened` (valid requester session) and disables on `viewer_closed`/session end/unmount. Safe across Activity recreation. Diagnostics `keep_awake_enabled/disabled`. |
-| 8 | GUI / state rough edges | Home had duplicate error text, no Retry, stale state after disconnect, no attempt count, no degraded, safe-area overlap, small-phone off-screen, no large-font handling, rotation issues. | Home: safe-area insets, 48 dp min buttons, accessible labels/hints/liveRegion, degraded/reconnecting with `attempt/3`, live indicator, Capture/Media error retry, Error card with preserved pairing hint, Request-again when available, offline hint. ProductPresentation: new `degraded` phase, reconnecting label `attempt/3`. Viewer: safe keep-awake, pip button, status pill, back-handler stops session, app-state diagnostics. |
-| 9 | App “closes/disappears” under instability | Unclear if crash vs recreation vs backgrounding vs navigation vs MediaProjection revoke vs teardown bug. Stale callbacks could kill replacement (see #4). No diagnostics to distinguish. | Added lifecycle diagnostics: native `partner-lifecycle` (activity_started/resumed/paused/stopped/destroyed via `ActivityLifecycleCallbacks`), JS `AppState` (app_backgrounded/foregrounded), viewer_opened/closed, pip_entered/exited, notification_*, keep_awake_*, media_stats, plus existing `session_*`, `capture_*`, `media_*`, `availability_*`, `control_*`. Fixed stale guards (see #4) so MediaProjection revoke `onStop` token check (`isCurrentCaptureLocked`) and `peerGeneration` + `rendererEpoch` isolation never redirects late callbacks to replacement. Verified `stopSharing` with no capture still ends session (session-scoped). |
-
-Additional stale-guard fix: `WebRtcEngine.peerGeneration` + `CaptureResources` token + `rendererEpoch` key already existed; we preserved them and added session-scoped `endSession(expectedSessionId)` and early-ignore for mismatched `sessionId`.
+| 1 | Poor connection stability | Bitrate 1–8 Mbps + `MAINTAIN_RESOLUTION` held 1600 px while queueing frames under congestion; fixed 30 fps; no stats. | **LAN profile** `1280px / 20fps / 0.4–2.5Mbps (start 0.8M) / BALANCED`. Lets TCC/REMB cut resolution/FPS/bitrate before latency. Added `WebRtcEngine.getStats` sanitized (bytesSent, packetsLost, jitter, rtt, candidatePairState). |
+| 2 | Poor image quality | Same trade-off: resolution forced while frames dropped → freezes/late frames. | Same profile: BALANCED keeps text readable; 1280 sufficient, 20 fps smooth, lower bitrate reduces loss. |
+| 3 | Lag / latency | `MAINTAIN_RESOLUTION` prioritizes resolution; 8 Mbps on noisy Wi-Fi → send queue seconds lag; no frame-gap detection. | BALANCED + lower max + 20 fps + `scheduleFrameGrace 5s` + bounded reconnect `[750,1500,3000]ms`. Degraded surfaced before reconnect. |
+| 4 | Stuck after disconnect / no reconnect option | `Error` terminal: `isBasePairedState` guard blocked `updateAvailability` from leaving Error; UI no Retry; `clearError()` sync void didn’t close pending/control; `MediaSessionController`/`ScreenCaptureCoordinator` stayed `error`; stale `sessionId` could kill replacement; `handleMessage`’s `rejectInvalidTransition` on mismatched active `sessionId` poisoned new session. | `updateAvailability` now exits `Error→baseState`; `clearError():Promise` clears timeout/pending/control → `baseState`; `recover()` clears session+media+capture; UI “Retry — clear error” + “Request Screen again”; **stale guard** in `handleMessage`: active `(Outgoing|Incoming|Connected)` with mismatched `sessionId` and `type!="REQUEST_SCREEN"` is **ignored** (busy `REQUEST_SCREEN` still declines). Fresh `sessionId` via `control.connect` random UUID each request. |
+| 5 | No incoming-request notification while backgrounded | Only in-app state. | Native `partner-request-notification` (channel `partnerscreen_incoming_request` ID 7306, `IMPORTANCE_HIGH`, no `fullScreenIntent`, `singleTop` launch, `POST_NOTIFICATIONS` checked) + `IncomingRequestNotifier` (show on `IncomingRequest`, clear on accept/decline/cancel/timeout/connected). Sanitized: only partner name (40 chars printable), no secrets/IP/SDP. |
+| 6 | No PiP | No manifest / `enterPictureInPictureMode`. | Native `partner-pip` (`Rational` aspect), plugin `withPip` (`supportsPictureInPicture` + `configChanges`, survives CNG, verified). Viewer has **explicit** PiP button (reliability over auto-enter); native tracks `wasInPip` via `OnActivityEntersForeground/Background` + `isInPictureInPictureMode` and emits `onPipModeChanged` (previously used unsupported `OnActivityEntersPictureInPicture` hooks — fixed). Video continues because renderer stays attached (`attachDesiredRendererLocked`). Stop remains via return-to-app. |
+| 7 | Viewer dims | No wake lock. | `partner-keep-awake` (`FLAG_KEEP_SCREEN_ON`, no `WAKE_LOCK` permission). Viewer `useEffect` enables on `viewer_opened` (valid requester `Connected`) and disables on `viewer_closed`/unmount/session end; survives recreation. |
+| 8 | GUI/state rough edges | Duplicate error text, no Retry, stale, no attempt count, safe-area overlap, off-screen buttons, large-font, rotation. | Home safe-area insets (`useSafeAreaInsets`), 48dp min buttons, `accessibility*` + `liveRegion`, `degraded`/`reconnecting attempt N`/`LIVE` distinct, capture/media Error retry, `Error` card preserves pairing, `Request again` when available, offline hint. `ProductPresentation` new `degraded` phase. Viewer pip button + status pill + `BackHandler` → `endSession`. |
+| 9 | App “closes/disappears” under instability | Unclear crash vs recreation vs background vs navigation vs MediaProjection revoke vs teardown. Stale callbacks (see #4) could kill replacement. No diagnostics. | `partner-lifecycle` (activity `started/resumed/paused/stopped/destroyed` via `ActivityLifecycleCallbacks` + `OnCreate/OnDestroy`), `_layout` `AppState` `app_backgrounded/foregrounded`, `viewer_opened/closed`, `pip_entered/exited`, `notification_*`, `keep_awake_*`, `media_stats`, plus `session/capture/media/availability/control`. Stale guards (`peerGeneration`, `captureGeneration token`, `rendererEpoch` key, `endSession(expectedId)` session-scoped) prevent late callbacks. **Do not** mislabel recreation as crash. |
 
 ---
 
 ## 2. Exact files changed and why
 
 **Product / session truth**
-- `src/session/SessionController.ts` — `updateAvailability` handles `Error`, `clearError` async + `recover`, stale-event early return for active mismatched `sessionId` (prevents replacement poisoning), preserve `sessionId` ownership guards.
-- `src/session/SessionState.ts` — unchanged (types).
-- `src/presentation/ProductPresentation.ts` — new `degraded` phase, reconnecting label with attempt, error label “tap Retry”, handling for degraded quality.
-- `src/presentation/useSession.ts` — expose `recover()` that clears session+media+capture.
+- `src/session/SessionController.ts` — `Error`-aware `updateAvailability`, async `clearError/recover`, early stale-ignore for active mismatched `sessionId` (except `REQUEST_SCREEN` busy), preserve `pair` and `sessionId` ownership.
+- `src/presentation/ProductPresentation.ts` — `degraded` phase, `reconnecting` label `attempt/3`, error “tap Retry”.
+- `src/presentation/useSession.ts` — `recover()` clears session+media+capture.
 - `src/presentation/useMediaSession.ts` — expose `clearError()`.
 
 **Media / capture**
-- `modules/partner-screen-capture/android/src/main/java/com/partnerscreen/capture/WebRtcEngine.java` — LAN profile constants (400k–2.5M, BALANCED, START 800k), `getStats` sanitized, comments.
-- `modules/partner-screen-capture/android/src/main/java/com/partnerscreen/capture/PartnerScreenCaptureService.kt` — capture 1280/20 (was 1600/30), comments.
-- `modules/partner-screen-capture/android/src/main/java/com/partnerscreen/capture/PartnerScreenCaptureModule.kt` — `getMediaStats` bridge.
-- `modules/partner-screen-capture/src/PartnerScreenCaptureModule.ts` — `getMediaStats` type.
-- `src/media/MediaSessionController.ts` — `clearError()` to idle, preserves bounded retry, frame-grace, stale guards.
-- `src/capture/ScreenCaptureCoordinator.ts` — unchanged logic but now cleared via `recover`.
-- `src/platform/media/ExpoWebRtcMedia.ts` — unchanged (timeouts).
-- `src/platform/capture/ExpoScreenCapture.ts` — unchanged.
+- `modules/partner-screen-capture/android/.../WebRtcEngine.java` — LAN `400k–2.5M (start 800k) / BALANCED / scaleResolutionDownBy 1.0`, sanitized `getStats(RTCStatsCollectorCallback)` → `media_stats` (bytesSent, packetsLost, framesEncoded, framesPerSecond, totalEncodeTime, jitter, roundTripTime, candidatePairState) — no IP/SDP/candidate.
+- `.../PartnerScreenCaptureService.kt` — `1280px / 20fps`.
+- `.../PartnerScreenCaptureModule.kt` — `getMediaStats` bridge.
+- `.../PartnerScreenCaptureModule.ts` — type.
+- `src/media/MediaSessionController.ts` — `clearError()->idle`, bounded retry, `isCurrentSession` guards, `rendererFirstFrame` epoch check.
+- `src/capture/ScreenCaptureCoordinator.ts` — unchanged but cleared via `recover`.
 
 **Native modules (new)**
-- `modules/partner-request-notification/**` — `PartnerRequestNotificationModule.kt`, TS wrapper, manifest. Separate ID 7306, high importance, tap `singleTop` intent, permission check, `POST_NOTIFICATIONS` already in `app.config.ts`.
-- `modules/partner-keep-awake/**` — `PartnerKeepAwakeModule.kt` FLAG_KEEP_SCREEN_ON.
-- `modules/partner-pip/**` — `PartnerPipModule.kt` `enterPip(Rational)`, `isInPip`, `onPipModeChanged`.
-- `modules/partner-lifecycle/**` — `PartnerLifecycleModule.kt` activity callbacks → `onLifecycleEvent`.
-- `plugins/withPip.ts` — config plugin adds `supportsPictureInPicture="true"` + `configChanges` to MainActivity, survives prebuild (verified).
+- `modules/partner-request-notification/**` — `PartnerRequestNotificationModule.kt` (ID 7306, `IMPORTANCE_HIGH`, `setAutoCancel`, `singleTop`, permission `POST_NOTIFICATIONS` check), `expo-module.config.json`, `build.gradle`.
+- `modules/partner-keep-awake/**` — `FLAG_KEEP_SCREEN_ON`, `enable/disable/isEnabled`.
+- `modules/partner-pip/**` — `enterPip(Rational)`, `isInPip`, `supportsPip`, `wasInPip` tracking via `OnCreate` + `OnActivityEntersForeground/Background` + `isInPictureInPictureMode` (fixed from unsupported hooks), `build.gradle`.
+- `modules/partner-lifecycle/**` — `ActivityLifecycleCallbacks` → `onLifecycleEvent`, `expo-module.config.json`.
+- `plugins/withPip.ts` — adds `supportsPictureInPicture="true"` + required `configChanges` to `MainActivity` (verified in `android/app/src/main/AndroidManifest.xml`).
 
 **Platform wrappers**
-- `src/platform/notifications/ExpoRequestNotification.ts`
+- `src/platform/notifications/ExpoRequestNotification.ts` (lazy `require`, fallback false)
 - `src/platform/keepawake/ExpoKeepAwake.ts`
-- `src/platform/pip/ExpoPip.ts`
+- `src/platform/pip/ExpoPip.ts` (subscribes to `onPipModeChanged`)
 - `src/platform/lifecycle/ExpoLifecycle.ts`
-- `src/request/IncomingRequestNotifier.ts` — session→notification sync.
+- `src/request/IncomingRequestNotifier.ts`
 
 **Application wiring**
-- `src/application/AppServices.ts` — instantiate `ExpoRequestNotification`, `IncomingRequestNotifier`, `ExpoLifecycle`, `ExpoKeepAwake`, `ExpoPip`; subscribe lifecycle + pip to diagnostics.
-- `app/_layout.tsx` — `AppState` background/foreground diagnostics.
-- `app/index.tsx` — safe-area insets, retry/recover UI, degraded/reconnecting/live detail, error handling, accessible labels.
-- `app/viewer.tsx` — keep-awake lifecycle, pip button + auto-enter on background when live, pip mode tracking, viewer_opened/closed, keep_awake, app_* diagnostics, BackHandler, returnHome, status with attempt/negotiating.
-- `app.config.ts` — add `./plugins/withPip`.
+- `src/application/AppServices.ts` — instantiate `ExpoRequestNotification`, `IncomingRequestNotifier`, `ExpoLifecycle`, `ExpoKeepAwake`, `ExpoPip`; subscribe `lifecyclePort→diagnostics`, `pipPort→pip_entered/exited`.
+- `app/_layout.tsx` — `AppState` `app_backgrounded/foregrounded` (global, viewer no longer duplicates).
+- `app/index.tsx` — safe-area `useSafeAreaInsets`, 48dp, `accessibility*`, `degraded/reconnecting/live` detail, retries, `Error` card, `Request again`.
+- `app/viewer.tsx` — keep-awake scoped to `requesterSessionId`, **explicit** PiP button only (auto-enter removed for reliability), `isPip` state via `pipPort`, `BackHandler` → `endSession`, status `reconnecting attempt N`.
+- `app.config.ts` — `plugins/withPip`.
 
 **Diagnostics**
-- `src/domain/diagnostics/DiagnosticEvent.ts` — added `media_stats`, `activity_*`, `app_backgrounded/foregrounded`, `viewer_opened/closed`, `pip_entered/exited`, `notification_shown/cleared`, `keep_awake_*`.
+- `src/domain/diagnostics/DiagnosticEvent.ts` — `media_stats`, `activity_*`, `app_*`, `viewer_*`, `pip_*`, `notification_*`, `keep_awake_*` (bounded 100, `VALID_KINDS`).
 
 **Verification**
-- `scripts/verify-m7.mjs` — update markers to new LAN profile (1280, 20, 400k/2.5M, BALANCED).
+- `scripts/verify-m7.mjs` — markers updated to `1280,20,400k/2.5M,BALANCED`.
 - `package.json` — `test:product` includes `stabilization.test.ts`.
-- `tests/stabilization.test.ts` — new (see below).
+- `tests/stabilization.test.ts` — 18 tests (see §3).
 
-**Other**
-- `tsconfig.product-tests.json` — already includes all `tests/**/*.ts`.
+**CI**
+- `.github/workflows/source-gate.yml` (new from `a1740d7`) — lightweight source gate (no APK).
+- `.github/workflows/build-dev-apk.yml` — now `workflow_dispatch` only (manual).
+
+`tsconfig.product-tests.json` already includes `tests/**/*.ts`. No `android/` committed.
 
 ---
 
 ## 3. New / changed tests
 
-**`tests/stabilization.test.ts` (new, 18 tests):**
-- `media failure returns to retryable paired state without losing pairing` — fail `Connected` via `captureFailed` → `Error` → `clearError` → `PairedAvailable`, pairing preserved, pending cleared.
-- `retry creates fresh sessionId and stale events cannot kill replacement` — Error → clear → new `sessionIdB` via overridden `connect`, stale `SESSION_ERROR` with old `sessionIdA` is ignored (stays `OutgoingRequest` with `sessionIdB`).
-- `clear/recover path does not remove pairing and offline returns to offline` — Error + availability `offline` → `PairedOffline` (auto via `updateAvailability`), pairing preserved.
-- `availability update while in Error returns to accurate offline/available without app restart` — Error → offline → `PairedOffline` → available → `PairedAvailable` → `requestScreen` succeeds.
-- `incoming request notification is shown and cleared on state transitions` — `IncomingRequest` → `showRequestNotification` (`notification_shown`), then `Connected` → `clearRequestNotification` (`notification_cleared`), then new Incoming → shown again, then `PairedAvailable` → cleared.
-- `notification cleared on timeout/decline and not shown for non-incoming states` — decline → cleared, no extra shown for `PairedAvailable`.
-- `keep-awake port can be enabled only during valid viewer session` — enable/disable counts equal, no global lock.
-- `pip state lifecycle is subscribed and emits entered/exited` — fake `pipListener` emits `pip_entered/exited` diagnostics.
-- `reconnect success preserves bounded retry and requires new remote track + renderer frame to become LIVE` — `remote_track` → `rendererFirstFrame` → `live` → `disconnected` → `reconnecting` → new `remote_track` + `rendererFirstFrame` → `live` + `media_reconnected`.
-- `reconnect exhaustion fails closed after bounded attempts` — 3× `failed` + recovery → `error` + `mediaFailed`.
-- `reconnect followed by fresh session starts with clean peer state` — new `Connected` with `sessionIdB` closes `sessionIdA` peer, stale `remote_track` for A not attached.
-- `media stats sanitization does not leak sensitive content` — no `sdp`/`candidate`/`ip`, numeric metrics present.
-- `no public/relay/IPv6 candidate is accepted` — `isSafePrivateHostCandidate` / `isSafeVideoSdp` checks (private host only, no TURN/STUN, no audio, no relay, no IPv6).
-- `capture/session teardown remains session-scoped` — `endSession(expectedId)` only ends exact `Connected`, stale `captureFailed(oldId)` while `OutgoingRequest` with new Id stays `OutgoingRequest`.
-- `diagnostic events are sanitized and never contain full IDs or secrets` — `isDiagnosticEvent` accepts new lifecycle kinds, rejects unknown.
-- `remote-track replacement renderer epoch remains correct and stale first-frame cannot make LIVE` — epoch increments, stale `rendererFirstFrame(oldEpoch)` not live, `newEpoch` → live.
-- `product presentation distinguishes degraded, reconnecting, live, error and ready-to-retry` — `degraded` phase, `reconnecting` label `2/3`, `live`, `error` with Retry.
-- `activity/viewer lifecycle does not leave stale media state after session teardown` — `live` → `PairedOffline` → `idle`, stale native `remote_track`/`failed` ignored.
+**`tests/stabilization.test.ts` (18 tests, behavior not string search):**
+- `media failure → retryable paired state` (pairing preserved, pending cleared)
+- `retry creates fresh sessionId and stale cannot kill replacement` (old `sessionIdA` `SESSION_ERROR` ignored while `OutgoingRequest` with `sessionIdB` stays)
+- `clear/recover preserves pairing, offline returns to offline`
+- `availability update while in Error → offline/available without restart` (then `requestScreen` succeeds)
+- `incoming notification shown/cleared on state transitions` (`IncomingRequest`→`show`, `Connected`→`clear`, new Incoming→show, `PairedAvailable`→clear, `notification_shown/cleared` diagnostics)
+- `notification cleared on timeout/decline, not shown for non-incoming`
+- `keep-awake enable/disable counts equal, no permanent lock`
+- `pip subscribe emits entered/exited` (`pip_entered/exited`)
+- `reconnect success requires new remote_track + rendererFirstFrame to LIVE` (+ `media_reconnected`)
+- `reconnect exhaustion fails closed after 3 attempts` → `error`, `mediaFailed`
+- `reconnect followed by fresh session starts with clean peer state` (old `remote_track` not attached)
+- `media stats sanitization` (no `sdp`/`candidate`/`ip`)
+- `no public/relay/IPv6 candidate` (`isSafePrivateHostCandidate` / `isSafeVideoSdp` private-host only, reject TURN/STUN/audio)
+- `capture/session teardown session-scoped` (`endSession(expectedId)` / `captureFailed(oldId)` while `OutgoingRequest(B)` stays)
+- `diagnostic sanitization` (`isDiagnosticEvent` accepts new kinds, rejects unknown)
+- `remote-track replacement epoch` (stale `rendererFirstFrame(oldEpoch)` not LIVE)
+- `product presentation degraded/reconnecting/live/error` (`degraded` label, `reconnecting 2/3`, `error` Retry)
+- `activity/viewer lifecycle does not leave stale media` (`live`→`PairedOffline`→`idle`, stale native ignored)
 
-Existing suites still green: `identity`, `diagnostics`, `pair-trust`, `pairing-crypto-wire`, `pairing-protocol`, `pairing-qr`, `pairing-service-hardening`, `pairing-service-real-crypto`, `pairing-service`, `persistence-hardening`, `protocol-hardening`, `qr-hardening`, `discovery-auth`, `availability`, `control-protocol`, `control-session`, `session-controller`, `pending-request`, `screen-capture-coordinator`, `capture-control`, `media-session`, `media-protocol`, `product-presentation`.
+Existing suites (137) still green: `identity`, `diagnostics`, `pair-trust`, `pairing-crypto-wire`, `pairing-protocol`, `pairing-qr`, `pairing-service*`, `persistence-hardening`, `protocol-hardening`, `qr-hardening`, `discovery-auth`, `availability`, `control-protocol`, `control-session`, `session-controller`, `pending-request`, `screen-capture-coordinator`, `capture-control`, `media-session`, `media-protocol`, `product-presentation`.
 
-Total: **155 tests, 0 fail** (was 137).
+**Total: 155 PASS, 0 fail.**  
+Static contracts `verify-pairing-crypto + M1-M8 + 4 autolink` **PASS**.
 
 ---
 
-## 4. Source-level validation results
+## 4. Source-level validation results (lightweight, no APK)
 
 ```
-npm ci                         — 649 packages, clean
+npm ci                         — 649 packages, clean (npm 10.9.8, Node 22.13.1)
 npm run typecheck              — PASS
-npm run test:product           — 155/155 PASS (was 137)
-npm run check:contracts        — 13/13 PASS (pairing-crypto + M1-M8 + 4 autolink)
-npm run check:baseline         — PASS (Expo SDK 57, RN 0.86.2, React 19.2.3)
+npm run test:product           — 155/155 PASS
+npm run check:contracts        — 13/13 PASS
+npm run check:baseline         — PASS (Expo SDK 57, RN 0.86.2, React 19.2.3, lockfileVersion 3)
 npm run sanitize               — PASS
-npm run config:check           — PASS (android package com.partnerscreen.app, permissions, blockedPermissions, plugins withPip)
-npm run deps:check             — Dependencies up to date (offline)
+npm run config:check           — PASS (package com.partnerscreen.app, blocked RECORD_AUDIO, plugin withPip)
+npm run deps:check             — PASS (offline)
+CI=1 npx expo prebuild --platform android --no-install
+                               — ✔ Finished prebuild (supportsPictureInPicture="true" + configChanges)
 ```
 
-**Build:** `npx expo prebuild --clean --platform android` — `✔ Finished prebuild`; generated `android/app/src/main/AndroidManifest.xml` contains `android:supportsPictureInPicture="true"` and `configChanges="...|screenSize|screenLayout|smallestScreenSize|..."`.
+**Build:** `npx expo prebuild --clean --platform android` verified manifest `android:supportsPictureInPicture="true"` and `screenSize|screenLayout|smallestScreenSize|orientation`.
 
-**Native compile:** Not run on headless source lane (requires Android SDK/NDK, JDK 17, build-tools 36.0.0). Prebuild proves config/plugins survive CNG; Kotlin files are syntactically valid and reference only `org.jitsi:webrtc:124.0.0` (verified via `build.gradle`), `androidx.core`, `Expo` APIs. No `RECORD_AUDIO`, `Log`, `System.out` forbidden markers.
+**Native compile:** **NOT PROVEN** on headless lane (requires JDK 17, Android SDK 36.0.0, NDK). Kotlin files reference only `org.jitsi:webrtc:124.0.0`, `androidx.core`, `expo.modules.kotlin`; no `RECORD_AUDIO`/`Log`/`System.out` forbidden markers. Prebuild proves CNG compatibility; compilation remains pending manual APK lane.
 
 ---
 
 ## 5. Android / native build result
 
-- CNG prebuild verified as above.
-- Full APK compile requires SDK-equipped lane: `PARTNERSCREEN_BUILD_COMMIT=$(git rev-parse HEAD) npm run build:dev-apk -- --preflight && npm run build:dev-apk`. The recovered `scripts/build-dev-apk.sh` (loads `keystoreProperties` before use, Hermes check) is unchanged in this branch. No generated `android/` committed, no APK/signing material committed.
-- Expected next lane inputs: platform-tools/ADB, API 36 platform, build-tools 36.0.0 (per CHECKPOINT).
+- **CNG prebuild:** PASS (see §4).
+- **APK:** **Intentionally not triggered.** Per current `main` (`a1740d7`), `.github/workflows/build-dev-apk.yml` is `workflow_dispatch` only. Heavy lane must not run on push/PR/Arena iteration. No `npm run build:dev-apk` was invoked, no Maestro dispatched.
+- **Next qualification (when human reviewer requests):** `PARTNERSCREEN_BUILD_COMMIT=$(git rev-parse HEAD) npm run build:dev-apk -- --preflight && npm run build:dev-apk` on SDK-equipped lane (platform-tools, android-36, build-tools 36.0.0), record SHA-256.
 
 ---
 
 ## 6. Maestro result
 
-Existing `.maestro/smoke.yaml` (emulator truth only):
-
-```
-- launchApp → assert PartnerScreen / Private trusted… / Current state / This device / Pair one… / Open diagnostics → tap Open diagnostics → assert Diagnostics / sanitized → screenshot
-```
-
-We did **not** claim Maestro proves real screen sharing, MediaProjection, PiP video delivery, or Wi-Fi recovery. Smoke still passes on emulator (launch success is not functional success). We did not add a brittle notification-navigation Maestro that would flake on emulator; notification is tested via unit `IncomingRequestNotifier` instead. If desired, a future Maestro file can assert `Retry — clear error` visibility when error state is artificially forced, but physical two-phone proof remains required.
+`.maestro/smoke.yaml` (emulator only): `launchApp(clearState:true)` → assert `PartnerScreen`/`Private trusted…`/`Current state`/`This device`/`Pair one…`/`Open diagnostics` → tap `Open diagnostics` → assert `Diagnostics`/`sanitized`. **Not claiming** proof of MediaProjection/PiP/Wi-Fi recovery. Notification lifecycle tested via unit `IncomingRequestNotifier`; physical notification + PiP video still require devices. No new brittle Maestro added.
 
 ---
 
-## 7. Still requires two physical phones
+## 7. What is proven vs not yet proven
 
-The following cannot be proven by Jest/TypeScript/Maestro and must be verified on two Android phones on same Wi-Fi:
+**Proven by source tests (deterministic):**
+- Error is recoverable, retry preserves pairing, fully tears down media/control/capture (pending cleared, `control.close` called, `MediaSessionController`→`idle`, `ScreenCaptureCoordinator`→`idle`).
+- Replacement uses new `sessionId` (UUID via `AuthenticatedSignalingCipher.randomId`), stale `sessionIdA` `SESSION_ERROR`/`media`/`capture` events ignored while `OutgoingRequest(B)` active.
+- No infinite reconnect loop (max 3, delays 750/1500/3000 + 5s frame grace, timer cancelled on teardown).
+- `updateAvailability` while `Error` → accurate `PairedAvailable`/`PairedOffline` (availability loss/reappearance).
+- Reconnect success requires new `remote_track` + `rendererFirstFrame(epoch)` to re-enter `LIVE`; exhaustion → `error`.
+- `rendererEpoch` isolation: stale `rendererFirstFrame(oldEpoch)` not LIVE.
+- `peerGeneration` + `captureGeneration` token + `sessionId` guards prevent late `PeerConnection`/`MediaProjection` callbacks from mutating replacement.
+- `endSession(expectedId)` session-scoped.
+- Private-host ICE: `isSafePrivateHostCandidate` / `isSafeVideoSdp` reject public/relay/IPv6/`m=audio`/`turn:`/`stun:`.
+- `keep-awake` enable/disable balanced, no global lock (unit).
+- `pip` subscribe emits `pip_entered/exited` (unit) and explicit viewer button.
+- `IncomingRequestNotifier` show/clear lifecycle and timeout/cancel (unit).
+- `isDiagnosticEvent` accepts new lifecycle/media kinds, rejects unknown; `buildDiagnosticReport` contains only `deviceIdSuffix` (8 chars), no secret/SDP/ICE.
+- Product presentation `degraded`/`reconnecting 2/3`/`live`/`error Retry`.
 
-- Real `MediaProjectionManager` consent UI appears after Accept, foreground service shows “Stop sharing” and `stopForeground(STOP_FOREGROUND_REMOVE)` works, OS revoke (`onStop`) → `capture_revoked` → `Error` → Retry.
-- Actual first rendered remote frame → `LIVE` (renderer `onFirstFrameRendered` epoch). `peerGeneration` + `remoteTrackEpoch` isolation across replacement tracks.
-- Viewer stays awake (`FLAG_KEEP_SCREEN_ON` scoped) and releases immediately on leave/stop/fail; no permanent wake lock; survives rotation.
-- PiP enters with correct aspect (1280/720 or rotated 720/1280), video keeps rendering in PiP while `sessionId` valid, PiP exits or shows terminal when session ends, return-to-app brings Stop button.
-- Incoming request while backgrounded shows Android notification `PartnerScreen — Screen request` with trusted partner name (sanitized) and tap navigates to IncomingRequest UI (deep link `singleTop`). Expiration/cancel/accept/decline clears it; `POST_NOTIFICATIONS` denial degrades gracefully.
-- Wi-Fi stall: `disconnected` → `media_degraded` → `media_reconnect_attempt` 1/3 (750 ms) → `publishing`/`remote_track_attached` → `media_reconnected` + `media_first_frame` → `LIVE` again. If degraded, resolution/FPS/bitrate downscale before latency. If 3 attempts exhausted → `media_failed` → `Error` → Retry → new `sessionId` succeeds without force-stop, no stale kill.
-- `partner-lost` / `partner-found` availability toggles do not poison future sessions; second complete session after `Stop` succeeds.
-- Rotation on either device preserves EGL/surface, no leaked `VideoCapturer`/`PeerConnection`/`SurfaceTextureHelper`; `onConfigurationChanged` → `changeScreenCaptureFormat`.
-- Diagnostic report (`DiagnosticsRepository` list → `buildDiagnosticReport`) shows `activity_*`, `app_backgrounded/foregrounded`, `viewer_opened/closed`, `pip_entered/exited`, `notification_*`, `keep_awake_*`, `media_*`, `session_*`, `capture_*`, `availability_*`, `control_*` in order without full device ID, pair secret, SDP, ICE, screen content. `deviceIdSuffix` only last 8.
-- No TURN: `PeerConnection.RTCConfiguration` empty ICE servers, `isPrivateHostCandidate` rejects relay/public/IPv6.
-- No audio: `setAudioPlayout(false)`, `setAudioRecording(false)`, `blockedPermissions` includes `RECORD_AUDIO` (verified), no `m=audio`, no `AudioTrack`.
+**Proven by Expo prebuild (config):**
+- `plugins/withPip.ts` adds `android:supportsPictureInPicture="true"` + `configChanges` to `MainActivity` and survives `expo prebuild --clean` (verified in `android/app/src/main/AndroidManifest.xml`). Autolinking of `expo-modules` (`expo-module.config.json` with `com.partnerscreen.*` names) passes `verify-m*autolink`.
+
+**NOT YET PROVEN (requires Java/Kotlin compile + APK + two phones):**
+- Kotlin compilation of `PartnerRequestNotificationModule.kt`, `PartnerKeepAwakeModule.kt`, `PartnerPipModule.kt` (fixed unsupported hooks), `PartnerLifecycleModule.kt`, `WebRtcEngine.java` LAN profile (`BALANCED`, 400k–2.5M, `getStats`), `PartnerScreenCaptureService.kt` (1280/20). Prebuild does **not** compile Kotlin.
+- Real `MediaProjectionManager.createScreenCaptureIntent()` consent UI, `startForegroundService` with `FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION`, `stopForeground(STOP_FOREGROUND_REMOVE)`, `MediaProjection.Callback.onStop` → `capture_revoked` → `Error`.
+- Actual first-frame `LIVE` (native `SurfaceViewRenderer` `onFirstFrameRendered` → `onFirstFrame` event → `rendererFirstFrame`).
+- Viewer `FLAG_KEEP_SCREEN_ON` visible via `dumpsys power` and released on leave/fail/recreation.
+- PiP: real `enterPictureInPictureMode(Rational)` with correct aspect on rotation, video continues rendering in PiP, `onPipModeChanged` via `isInPictureInPictureMode`/`wasInPip` tracking, return-to-app shows `Stop session`.
+- Incoming request Android notification while app backgrounded (channel `partnerscreen_incoming_request`, `IMPORTANCE_HIGH`, no `fullScreenIntent`, `singleTop` tap → `IncomingRequest` UI, permission `POST_NOTIFICATIONS` denial fallback to in-app only, no secrets in text).
+- WebRTC performance: 1280/20/BALANCED/0.4–2.5M is heuristic; needs A/B on real Wi-Fi with `media_stats` (bytesSent, framesPerSecond, packetsLost, jitter, rtt) to finalize; `getStats` field names (`bytesSent` etc.) may vary by report type and return `null` gracefully if unsupported — must be validated on device.
+- Wi-Fi degradation: `disconnected` → `media_degraded` → `media_reconnect_attempt` 1/3 → `media_reconnected` → `LIVE` vs exhausted → `Error` → Retry.
+- Partner `availability_partner_lost/found` while in `Error` → accurate offline/available and second complete session after Stop.
+- Rotation/EGL leak check, `changeScreenCaptureFormat` on `onConfigurationChanged`.
+- Maestro on ATD (ATD fix at `79ca7f4` still present).
+
+> **Source and prebuild gates pass. Native Android compilation and physical qualification remain pending.** No APK/Maestro workflow was triggered.
 
 ---
 
-## 8. Concise physical-device retest checklist (two phones, same Wi-Fi, APK from current commit)
+## 8. Concise physical-device retest checklist (APK from `65ce02d`, same Wi-Fi)
 
-1. `git rev-parse HEAD` → `PARTNERSCREEN_BUILD_COMMIT` → `npm run build:dev-apk -- --preflight` → `build:dev-apk` → record APK SHA-256, install on both.
-2. Set distinct device names, `Pair → QR` → restart → `availability_partner_found` on both → `PairedAvailable`.
-3. Background receiving phone (home). From partner, `Request Screen`.
-4. Receiving phone shows Android notification “Trusted partner … requesting your screen.” Tap → app foregrounds to `IncomingRequest` screen (not stale).
-5. `Accept` → system `MediaProjection` consent appears → grant.
-6. Capturer `capture_started` → WebRTC `media_negotiation_started` → viewer shows `remote_track_attached` → `media_first_frame` → `LIVE`.
-7. Viewer remains awake (10 min, check no dim). `dumpsys power` shows `KEEP_SCREEN_ON` flag while viewer active, cleared after leaving.
-8. Press Home from viewer → if `live` + Android O+, auto PiP (or tap `PiP` button) → video continues in PiP. Rotate sharing phone → aspect updates (check `onFrameResolutionChanged`). Tap PiP → returns to viewer, `Stop session` visible.
-9. Return from PiP, degrade Wi-Fi (microwave / router throttle or walk away 5 s): UI shows `Connection degraded` → `Reconnecting private video — attempt 1/3` (LIVE off), then `Reconnected` → `LIVE` again without force-stop. Check `media_stats` in diagnostics (bytesSent, jitter, rtt, packet loss) — no IP.
-10. Kill Wi-Fi 15 s: `disconnected` → 3 attempts (750,1500,3000 ms + 5 s frame grace) → `media_failed` → `Error` → “Session stopped — tap Retry when ready” + `Retry — clear error` + `Request Screen again` (if available) / offline hint.
-11. Tap `Retry` → status returns to `PairedAvailable` (if partner still `available`) or `PairedOffline` (if not) — `Error` cleared, pairing preserved (`pairId` same), no app restart.
-12. Immediately `Request Screen again` (fresh `sessionId`) → `OutgoingRequest` → accept → `Connected` → capture → `LIVE` (proves stale `sessionIdA` events ignored, new `sessionIdB` not killed). Check diagnostics: second `session_requested` / `session_connected` with new `sessionId`.
-13. Rotate both devices (portrait/landscape) — no crash, no duplicate `PeerConnection` (check `peerGeneration` increments only on new session, not rotation), no leaked `VideoTrack`/`EglBase`.
-14. Stop from either side (viewer `Stop session` or sharer `Stop sharing` or notification `Stop sharing` or OS revoke swipe): `capture_stopped`/`revoked` → `session_ended/error` → both return to `PairedAvailable`/`Offline`, FGS removed, renderer detached (`removeSink`), `PeerConnection` closed/disposed, wake lock released, PiP closed if active.
-15. Within 2 s, `Request Screen` again → new `LIVE` succeeds (proves `stopScreenCapture` + `closeMedia` idempotent and cleared).
-16. Background/foreground both apps (recent apps swipe but not kill) → repeat 3–15, ensuring `activity_paused/stopped/resumed` + `app_backgrounded/foregrounded` diagnostics appear, but no false `crash`.
-17. Diagnostics: `Open diagnostics` → copy → report shows ordered events (`pairing_completed`, `availability_partner_found`, `session_request_received`, `session_accepted`, `session_connected`, `capture_consent_requested`, `capture_started`, `media_negotiation_started`, `media_remote_track`, `media_first_frame`, `media_degraded`, `media_reconnect_attempt`, `media_reconnected`, `session_ended`, `viewer_opened/closed`, `pip_entered/exited`, `activity_*`, `notification_*`, `keep_awake_*`) with `deviceIdSuffix`, `buildCommit`, no full ID, no SDP, no ICE.
-18. Security: `npx` logs, wire capture shows only `c1:` sealed frames, `isSafePrivateHostCandidate` + `isSafeVideoSdp` still reject public/relay/TURN/STUN/IPv6/m=audio; `blockedPermissions` still includes `RECORD_AUDIO`; no `stun:`, `turn` in `WebRtcEngine` (verified).
+1. `git rev-parse HEAD` → `PARTNERSCREEN_BUILD_COMMIT` → `build:dev-apk --preflight` → `build:dev-apk` → SHA-256 → install both.
+2. Distinct names → `Pair QR` → restart → `availability_partner_found` → `PairedAvailable`.
+3. Background receiver → partner `Request Screen`.
+4. Receiver shows notification “Trusted partner … requesting your screen.” Tap → foregrounds to `IncomingRequest` (not stale).
+5. `Accept` → system `MediaProjection` consent → grant.
+6. `capture_started` → `media_negotiation_started` → `remote_track_attached` → `media_first_frame` → `LIVE`.
+7. Viewer stays awake (10 min, `dumpsys power` `KEEP_SCREEN_ON` while viewer, cleared after).
+8. Tap `PiP` → video continues in PiP; rotate sharer → aspect updates; tap PiP → return, `Stop session` visible (explicit PiP only, no surprise auto-enter).
+9. Degrade Wi-Fi 5 s: `Connection degraded` → `Reconnecting private video — attempt 1/3` (LIVE off) → `Reconnected` → `LIVE` (check `media_stats` — no IP).
+10. Kill Wi-Fi 15 s: 3 attempts + 5 s grace → `media_failed` → `Error` “Session stopped — tap Retry” + `Retry — clear error` + `Request Screen again` (if available).
+11. Tap `Retry` → `PairedAvailable`/`PairedOffline` (pairId preserved), no restart.
+12. `Request Screen again` (fresh `sessionId`) → `OutgoingRequest(B)` → accept → `LIVE` (stale `sessionIdA` ignored).
+13. Rotate both → no crash, no duplicate `PeerConnection`, no leaked `VideoTrack`/`EglBase`.
+14. Stop via viewer `Stop session` / sharer `Stop sharing` / notification `Stop sharing` / OS revoke → `capture_stopped/revoked` → `session_ended/error` → `Paired*`, FGS removed, `removeSink`, `peerGeneration` incremented, wake lock released, PiP closed.
+15. Within 2 s `Request Screen` → new `LIVE` (idempotent stop/clear).
+16. Background/foreground both apps → repeat 3–15, `activity_*` + `app_backgrounded/foregrounded` appear, no false `crash`.
+17. `Open diagnostics` → copy → ordered events (`pairing_completed`, …, `viewer_opened/closed`, `pip_entered/exited`, `activity_*`, `notification_*`, `keep_awake_*`) with `deviceIdSuffix` only, `buildCommit` `65ce02d`, no SDP/ICE.
+18. Security: wire shows only `c1:` sealed, `isSafePrivateHostCandidate`/`isSafeVideoSdp` reject public/relay/TURN/STUN/IPv6/`m=audio`; `blockedPermissions` includes `RECORD_AUDIO`.
 
 ---
 
 ## 9. Remaining risks / out-of-scope
 
-- **LAN-only STUN/TURN:** We kept `RTCConfiguration(Collections.emptyList())` + `iceTransportsType ALL` with private-host filtering. On congested Wi-Fi with client isolation or AP that blocks host candidates, reliability may still be marginal; we deliberately do not add TURN (product invariant). A future LAN-only improvement could use mDNS ICE candidates if supported by the WebRTC build, but requires API verification.
-- **Encoder tuning is heuristic:** `BALANCED` + 400k–2.5M + 1280/20 is sensible for phone text on Wi-Fi but not formally profiled across all SoCs. Some devices may still prefer `MAINTAIN_FRAMERATE` for even lower latency; we left `SCREEN_SHARE_START_BITRATE_BPS` as constant but adaptive bitrate via TCC will still govern. Physical A/B with `webrtc-stats` (`media_stats` diagnostics) is needed to finalize.
-- **Stats completeness:** `getStats` is best-effort via `RTCStatsCollectorCallback`; if the M124 artifact lacks `getStats` promise-style or field names differ, the callback returns `null` and diagnostics will show no `media_stats` rather than crash. We do not invent APIs; field names (`bytesSent`, `packetsLost`, `framesEncoded`, `framesPerSecond`, `jitter`, `roundTripTime`) are from standard W3C stats but may vary; we sanitize and ignore missing.
-- **PiP actions:** We provide return-to-app path per spec rather than PiP `Stop sharing` RemoteAction. If product wants explicit PiP `Stop` without returning, a follow-up can add `PictureInPictureParams` actions with `PendingIntent.getService(ACTION_STOP)`. Current avoids adding extra pending intents that could confuse pre-13.
-- **Notification permission UX:** On Android 13+, if user denies `POST_NOTIFICATIONS`, the request notification will silently not appear (native returns false, JS stays in-app). TypeScript does not prompt again automatically (per “follow permission rules”). Product may later want a soft rationale (“Allow notifications so you see partner requests while backgrounded”) but we avoid nagging.
-- **Activity lifecycle vs process death:** We distinguish `activity_destroyed` (recreation) vs process death via `DiagnosticsRepository` persistence + `app_started` bootstrap marker, but we deliberately do not mislabel recreation as crash. True native `Tombstone`/`ANR` still requires `logcat` and is out-of-scope for JS diagnostics.
-- **Maestro on ATD:** The ATD fix at `79ca7f4` (Use Android Test Device) remains HEAD; our prebuild includes it. Maestro cannot run on headless source lane without ATD; we rely on `verify-m*` + unit tests. A CI run with ATD would still need to `launchApp(clearState:true)` then `assertVisible` as in `smoke.yaml`.
-- **APK signing:** Development signing via `scripts/build-dev-apk.sh` (dev keystore) is for qualification; production signing is separate and not in repo.
+- **LAN TURN:** `RTCConfiguration(empty)` + private-host filter deliberately. If AP isolates host candidates, reliability marginal but TURN would violate LAN-only.
+- **Encoder heuristic:** `BALANCED` + 400k–2.5M + 1280/20 sensible but not profiled across SoCs; `MAINTAIN_FRAMERATE` may be lower latency on some devices; `SCREEN_SHARE_START_BITRATE_BPS 800k` unused (WebRTC negotiates start) — flagged for device A/B.
+- **Stats:** `getStats` via `RTCStatsCollectorCallback` / `report.getStatsMap()` / `stat.getType()/getMembers()` is M124 API; if field names differ, callback returns `null` gracefully (no crash) but `media_stats` diagnostics will be absent — needs device validation.
+- **PiP actions:** Return-to-app path only; no PiP `Stop sharing` RemoteAction (could add `PictureInPictureParams.Builder.setActions` later).
+- **Notification permission:** On Android 13+ denial, notification silently not shown (native returns false, in-app UI remains). No extra prompt to avoid nag.
+- **Lifecycle vs crash:** `activity_destroyed` (recreation) vs process death distinguished via `DiagnosticsRepository` persistence + `app_started` bootstrap; true tombstone/ANR still needs `logcat`.
+- **Kotlin compile:** PiP hooks fixed to supported `OnCreate`/`OnActivityEntersForeground/Background` + `isInPictureInPictureMode`; keep-awake, lifecycle, request-notification use only `OnCreate`/`OnDestroy`/`OnActivityDestroys`/`OnActivityResult` which are verified. Compilation still pending manual lane.
 
----
+**Files to review in PR:** `src/session/SessionController.ts`, `src/media/MediaSessionController.ts`, `src/presentation/ProductPresentation.ts`, `modules/partner-screen-capture/.../WebRtcEngine.java` & `PartnerScreenCaptureService.kt`, `modules/partner-*-*/**`, `plugins/withPip.ts`, `src/request/IncomingRequestNotifier.ts`, `app/*`, `src/platform/*`, `src/domain/diagnostics/*`, `tests/stabilization.test.ts`, `scripts/verify-m7.mjs`, `package.json`.
 
-**Files to review in PR:** `src/session/SessionController.ts` (stale guard + recovery), `src/media/MediaSessionController.ts` (`clearError`), `src/presentation/ProductPresentation.ts` (`degraded`), `modules/partner-screen-capture/.../WebRtcEngine.java` & `.../PartnerScreenCaptureService.kt` (LAN profile), `modules/partner-*-*/**` (4 new native modules), `plugins/withPip.ts`, `src/request/IncomingRequestNotifier.ts`, `app/*`, `src/platform/*`, `src/domain/diagnostics/*`, `tests/stabilization.test.ts`, `scripts/verify-m7.mjs`, `package.json`.
-
-No generated `android/`, no APK, no signing material committed.
+No `android/`, APK, or signing material committed.
 
