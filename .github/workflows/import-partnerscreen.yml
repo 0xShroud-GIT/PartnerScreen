@@ -1,15 +1,15 @@
 name: Import canonical PartnerScreen tree
 
 on:
-  push:
-    paths:
-      - '.import/TRIGGER'
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
 
 jobs:
   import:
+    if: github.event.issue.title == 'RUN_PARTNERSCREEN_CANONICAL_IMPORT'
     runs-on: ubuntu-latest
     steps:
       - name: Check out staging branch
