@@ -55,11 +55,14 @@ class PartnerScreenCaptureService : Service() {
 
   private fun startProjection(intent: Intent) {
     if (captureStarting || captureStarted || stopping) return
+    val sessionId = intent.getStringExtra(EXTRA_SESSION_ID)
+    if (sessionId == null) {
+      stopSelf()
+      return
+    }
     captureStarting = true
+    captureSessionId = sessionId
     try {
-      val sessionId = intent.getStringExtra(EXTRA_SESSION_ID)
-        ?: throw IllegalStateException("Missing capture session.")
-      captureSessionId = sessionId
       createNotificationChannel()
       startForegroundCompat(buildNotification("Preparing screen sharing…"))
 
