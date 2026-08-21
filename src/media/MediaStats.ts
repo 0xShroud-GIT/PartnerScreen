@@ -9,6 +9,8 @@ export type SanitizedMediaStats = {
   roundTripTime?: number;
   frameWidth?: number;
   frameHeight?: number;
+  framesCaptured?: number;
+  framesEnteringSender?: number;
   candidatePairState?: 'succeeded';
   bitrateParametersState?: 'applied' | 'failed';
   measuredBitrateBps?: number;
@@ -25,6 +27,8 @@ const NUMERIC_KEYS = [
   'roundTripTime',
   'frameWidth',
   'frameHeight',
+  'framesCaptured',
+  'framesEnteringSender',
   'measuredBitrateBps',
 ] as const;
 
