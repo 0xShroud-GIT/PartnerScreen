@@ -1,15 +1,15 @@
 name: Chirp Stabilization Patch
 
 on:
-  push:
-    branches: [fix/persist-media-diagnostics]
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   apply-and-verify:
-    if: contains(github.event.head_commit.message, 'bootstrap stabilization patch workflow')
+    if: github.event.pull_request.draft == true && github.head_ref == 'fix/persist-media-diagnostics'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
