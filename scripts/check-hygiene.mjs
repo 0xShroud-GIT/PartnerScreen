@@ -68,6 +68,8 @@ for (const invariant of [
   'SCREEN_MAX_BITRATE_BPS = 8_000_000',
   'MEDIA_DISCONNECTED_GRACE_MS = 3_000',
   'MEDIA_KEYFRAME_REQUEST_DELAYS_MS',
+  'MEDIA_KEYFRAME_STEADY_RETRY_MS = 5_000',
+  'MEDIA_SIGNAL_RETRY_MS = 1_000',
 ]) {
   if (!mediaPolicy.includes(invariant)) fail(`media policy invariant missing: ${invariant}`);
 }
@@ -75,16 +77,28 @@ for (const invariant of [
 const mediaSession = read('src/media/MediaSession.ts');
 for (const invariant of [
   "sendMedia(sessionId, 'MEDIA_KEYFRAME_REQUEST'",
+  'MEDIA_KEYFRAME_STEADY_RETRY_MS',
   'createOffer(iceRestart ? { iceRestart: true } : undefined)',
   "parameters.degradationPreference = 'maintain-resolution'",
+  'await this.forceKeyframe(sessionId);',
+  "(track as unknown as EndedAwareTrack).onended = null",
+  "this.peer?.connectionState === 'connected'",
   'getStatsSnapshot',
 ]) {
   if (!mediaSession.includes(invariant)) fail(`media recovery/observability invariant missing: ${invariant}`);
 }
+if (mediaSession.includes('if (this.keyframeAttempt >= MEDIA_KEYFRAME_REQUEST_DELAYS_MS.length)')) {
+  fail('first-frame keyframe exhaustion must not escalate into ICE recovery');
+}
 
 const home = read('app/index.tsx');
+const layout = read('app/_layout.tsx');
 const viewer = read('app/viewer.tsx');
-if (!home.includes("useKeepAwake('chirp-sharer')")) fail('active sharer must hold bounded Expo keep-awake ownership');
+for (const invariant of ['TextInput', 'saveDeviceName', 'useNotificationPermission', "useKeepAwake('chirp-sharer')"]) {
+  if (!home.includes(invariant)) fail(`home release UX invariant missing: ${invariant}`);
+}
+if (/\bUnknown\b/.test(home)) fail('home must not silently render an unnamed fresh install as Unknown');
+if (!layout.includes('<Stack.Screen name="index" options={{ headerShown: false }}')) fail('home must not render a duplicate Stack header');
 if (!viewer.includes("useKeepAwake('chirp-viewer')")) fail('active viewer must hold bounded Expo keep-awake ownership');
 
 const plugin = read('plugins/withChirpWebRtc.js');
