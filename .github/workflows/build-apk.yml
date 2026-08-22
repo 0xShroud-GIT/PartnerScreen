@@ -1,0 +1,33 @@
+name: Chirp APK
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - run: npm install --no-audit --no-fund
+      - run: npm run ci
+      - run: npm run build:apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chirp-debug-apk
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
