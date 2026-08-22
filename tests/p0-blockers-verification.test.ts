@@ -123,7 +123,7 @@ test('P0-D: full process death destroys callbacks, endpoint and native-process t
   }
 });
 
-test('P0-C: sharer publishing without transport triggers bounded connection recovery', async () => {
+test('P0-C: sharer publishing without transport triggers bounded recovery or terminal media failure', async () => {
   const twin = new PartnerScreenTwin(1001);
   try {
     await twin.initialize();
@@ -135,7 +135,9 @@ test('P0-C: sharer publishing without transport triggers bounded connection reco
     await twin.flush();
     await twin.advanceBy(MEDIA_CONNECTION_TIMEOUT_MS + 100);
     const after = twin.bob.mediaSessionController.getSnapshot();
-    assert.ok(after.type === 'reconnecting' || after.type === 'error', `expected bounded recovery, got ${after.type}`);
+    assert.ok(twin.bob.diagnostics.count('media_reconnect_attempt') >= 1, 'media timeout must attempt bounded recovery before terminal cleanup');
+    assert.ok(after.type === 'reconnecting' || after.type === 'error' || after.type === 'idle', `expected recovery or terminal cleanup, got ${after.type}`);
+    if (after.type === 'idle') assert.equal(twin.bob.sessionController.getSnapshot().type, 'Error');
     assert.notEqual(twin.bob.sessionController.getSnapshot().type, 'Unpaired');
   } finally {
     twin.dispose();
