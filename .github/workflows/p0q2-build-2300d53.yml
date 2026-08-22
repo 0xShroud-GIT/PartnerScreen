@@ -1,9 +1,9 @@
 name: P0Q2 build exact merged main
 
 on:
-  push:
+  pull_request:
     branches:
-      - build/p0q2-2300d53
+      - main
 
 permissions:
   contents: read
