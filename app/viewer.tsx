@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -21,11 +21,13 @@ export default function ViewerScreen() {
     ? media.state
     : null;
   const rendererReady = rendererTrackState !== null;
-  // A replacement remote track inside the same session creates a fresh renderer lifecycle.
+  // A replacement remote track inside the same session creates a fresh media epoch.
   const rendererEpoch = rendererTrackState?.trackEpoch ?? 0;
 
   const [isPip, setIsPip] = useState(false);
   const [videoGeometry, setVideoGeometry] = useState<VideoGeometry | null>(null);
+  const [rendererMountEpoch, setRendererMountEpoch] = useState(0);
+  const lastRenderedEpoch = useRef(0);
   const videoSize = videoGeometry ? displayedVideoSize(videoGeometry) : null;
 
   const returnHome = useCallback(() => {
@@ -88,6 +90,22 @@ export default function ViewerScreen() {
     setVideoGeometry(null);
   }, [requesterSessionId, rendererEpoch]);
 
+  // Do not destroy/recreate SurfaceViewRenderer while the initial session has never rendered a frame.
+  // This keeps repeated pre-LIVE track replacement off the Android UI/EGL lifecycle. Once a frame has
+  // genuinely rendered, a later replacement track gets a fresh renderer lifecycle so first-frame truth
+  // is scoped to that replacement epoch.
+  useEffect(() => {
+    if (!requesterSessionId) {
+      lastRenderedEpoch.current = 0;
+      setRendererMountEpoch(0);
+      return;
+    }
+    const renderedEpoch = lastRenderedEpoch.current;
+    if (rendererEpoch > 0 && renderedEpoch > 0 && rendererEpoch !== renderedEpoch) {
+      setRendererMountEpoch(rendererEpoch);
+    }
+  }, [requesterSessionId, rendererEpoch]);
+
   useEffect(() => {
     const sub = appServices.pipPort.subscribe((event) => {
       setIsPip(event.isInPictureInPictureMode);
@@ -129,12 +147,16 @@ export default function ViewerScreen() {
       <View style={styles.videoStage}>
         {rendererReady ? (
           <PartnerRemoteVideoView
-            key={`${requesterSessionId}:${rendererEpoch}`}
+            key={`${requesterSessionId}:${rendererMountEpoch}`}
             accessibilityLabel="Trusted partner remote screen video"
             pointerEvents="none"
             sessionId={requesterSessionId}
+            trackEpoch={rendererEpoch}
             style={styles.video}
-            onFirstFrame={(event) => { void media.rendererFirstFrame(event.nativeEvent.sessionId, rendererEpoch); }}
+            onFirstFrame={(event) => {
+              lastRenderedEpoch.current = rendererEpoch;
+              void media.rendererFirstFrame(event.nativeEvent.sessionId, rendererEpoch);
+            }}
             onFrameResolution={(event) => {
               const { width, height, rotation } = event.nativeEvent;
               setVideoGeometry({ width, height, rotation });
