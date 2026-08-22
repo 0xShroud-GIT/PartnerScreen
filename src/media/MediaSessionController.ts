@@ -72,6 +72,7 @@ export class MediaSessionController {
   private previousBytesSent: { bytesSent: number; atMs: number } | null = null;
   private previousPacketsLost: number | undefined;
   private transport: MediaTransportSnapshot = emptyMediaTransportSnapshot();
+  private disposed = false;
 
   constructor(
     private readonly native: WebRtcMediaPort,
@@ -99,9 +100,6 @@ export class MediaSessionController {
     this.clearRecovery(true);
     this.clearDeadlines();
     this.clearStats();
-    // After a failed media session, return to idle so a replacement session can start clean.
-    // syncAuthority will also converge to idle when the product session is not Connected; this covers the
-    // manual retry path where the SessionController has already returned to Paired*.
     this.setState({ type: 'idle' });
   }); }
   resetToIdle(): Promise<void> { return this.enqueue(async () => {
@@ -114,7 +112,6 @@ export class MediaSessionController {
   }); }
 
   rendererFirstFrame(sessionId: string, rendererEpoch: number): Promise<void> { return this.enqueue(async () => {
-    // LIVE is entered only for the exact current session AND the exact current renderer/track epoch.
     if (this.state.type !== 'remote_track_attached' || this.state.sessionId !== sessionId || this.state.trackEpoch !== rendererEpoch) return;
     const recovered = this.recoveryAttempt > 0;
     const trackEpoch = this.state.trackEpoch;
@@ -132,12 +129,12 @@ export class MediaSessionController {
 
   dispose(): void {
     const active = this.activeSessionId();
+    this.disposed = true;
     this.unsubscribeNative(); this.unsubscribeSession(); this.unsubscribeMedia(); this.unsubscribeCapture();
     this.clearRecovery(true); this.clearDeadlines(); this.clearStats(); this.listeners.clear();
     if (active) void this.native.close(active).catch(() => undefined);
   }
 
-  /** True only while the product session is Connected with exactly expectedSessionId. */
   private isCurrentSession(expectedSessionId: string): boolean {
     const session = this.session.getSnapshot();
     return session.type === 'Connected' && session.sessionId === expectedSessionId;
@@ -191,7 +188,6 @@ export class MediaSessionController {
     this.mediaPhase = 'waiting_for_sender';
     try {
       const offer = await this.native.createPublisherOffer(sessionId);
-      // Delayed offer from a replaced session must never be signaled over the fresh channel.
       if (!this.isCurrentSession(sessionId)) return;
       await this.session.sendMedia(sessionId, 'SDP_OFFER', { sdp: offer });
       if (!this.isCurrentSession(sessionId)) return;
@@ -225,7 +221,6 @@ export class MediaSessionController {
           this.scheduleAttemptWatchdog(sessionId);
         }
         const answer = await this.native.acceptOffer(sessionId, message.payload.sdp);
-        // Delayed answer from a replaced session must never be sent over the fresh channel.
         if (!this.isCurrentSession(sessionId)) return;
         await this.session.sendMedia(sessionId, 'SDP_ANSWER', { sdp: answer });
         if (this.mediaPhase === 'waiting_for_offer' || this.mediaPhase === 'negotiating') this.mediaPhase = 'waiting_for_transport';
@@ -265,7 +260,6 @@ export class MediaSessionController {
       return;
     }
 
-    // new/connecting are progress signals only and never product LIVE truth.
     if (event.state === 'connected') {
       const recovering = this.recoveryAttempt > 0;
       this.clearRecovery(false);
@@ -434,65 +428,74 @@ export class MediaSessionController {
   }
 
   private statsGeneration = 0;
-  private statsInFlight: { generation: number; sessionId: string } | null = null;
+  private nextNativeStatsToken = 0;
+  private nativeStatsFlight: { token: number; sessionId: string; promise: Promise<SanitizedMediaStats | null> } | null = null;
   private statsTimeout: RecoveryTimer | null = null;
 
   private scheduleStats(sessionId: string): void {
+    if (this.disposed) return;
     this.clearStatsTimer();
     this.statsTimer = this.scheduler.schedule(MEDIA_STATS_POLL_INTERVAL_MS, () => {
       this.statsTimer = null;
-      // Telemetry is a side channel: never join the media operation queue.
       void this.pullStats(sessionId).catch(() => undefined);
     });
   }
 
+  private statsEligibleSessionId(): string | null {
+    if (this.disposed) return null;
+    if (this.state.type !== 'live' && this.state.type !== 'publishing' && this.state.type !== 'remote_track_attached') return null;
+    return this.isCurrentSession(this.state.sessionId) ? this.state.sessionId : null;
+  }
+
+  private resumeStatsAfterNativeFlight(): void {
+    const current = this.statsEligibleSessionId();
+    if (current) this.scheduleStats(current);
+  }
+
   private async pullStats(sessionId: string): Promise<void> {
-    if (this.statsInFlight?.sessionId === sessionId) return;
+    if (this.disposed || this.nativeStatsFlight) return;
     if (!this.isCurrentSession(sessionId)) return;
     if (this.state.type !== 'live' && this.state.type !== 'publishing' && this.state.type !== 'remote_track_attached') return;
     if (this.state.sessionId !== sessionId) return;
-    const generation = ++this.statsGeneration;
-    this.statsInFlight = { generation, sessionId };
-    let timeoutFired = false;
-    const timeoutPromise = new Promise<{ timedOut: true }>((resolve) => {
-      this.statsTimeout = this.scheduler.schedule(1200, () => {
-        timeoutFired = true;
-        resolve({ timedOut: true });
+
+    const consumerGeneration = this.statsGeneration;
+    const token = ++this.nextNativeStatsToken;
+    const nativePromise = this.native.getStats(sessionId).catch(() => null);
+    this.nativeStatsFlight = { token, sessionId, promise: nativePromise };
+
+    const timeoutPromise = new Promise<{ timedOut: true; value: null }>((resolve) => {
+      this.statsTimeout = this.scheduler.schedule(1_200, () => {
+        this.statsTimeout = null;
+        resolve({ timedOut: true, value: null });
       });
     });
-    const nativePromise = this.native.getStats(sessionId)
-      .then((value) => ({ value: value as SanitizedMediaStats | null, timedOut: false as const }))
-      .catch(() => ({ value: null as SanitizedMediaStats | null, timedOut: false as const }));
-    const winner = await Promise.race([
-      nativePromise.then((result) => {
-        if (this.statsTimeout) {
-          this.statsTimeout.cancel();
-          this.statsTimeout = null;
-        }
-        return result;
-      }),
-      timeoutPromise.then(() => ({ value: null as SanitizedMediaStats | null, timedOut: true as const })),
-    ]).catch(() => ({ value: null as SanitizedMediaStats | null, timedOut: true as const }));
+
+    const nativeResultPromise = nativePromise.then((value) => ({ timedOut: false as const, value }));
+    const winner = await Promise.race([nativeResultPromise, timeoutPromise]);
+
     if (winner.timedOut) {
-      // Presentation timeout: abandon sample but keep native request in-flight.
-      // Late completion must not mutate a replaced session and must not be counted as finished.
-      nativePromise.then(() => {
-        if (this.statsInFlight?.generation === generation && this.statsInFlight?.sessionId === sessionId) {
-          this.statsInFlight = null;
-        }
-      }).catch(() => {
-        if (this.statsInFlight?.generation === generation) this.statsInFlight = null;
+      // The sample is abandoned, but the native invocation remains the single global flight until it settles.
+      void nativePromise.finally(() => {
+        if (this.nativeStatsFlight?.token !== token) return;
+        this.nativeStatsFlight = null;
+        this.resumeStatsAfterNativeFlight();
       });
       return;
     }
-    // Native completed before timeout.
-    if (this.statsInFlight?.generation !== generation || !this.isCurrentSession(sessionId)) {
-      this.statsInFlight = null;
+
+    if (this.statsTimeout) {
+      this.statsTimeout.cancel();
+      this.statsTimeout = null;
+    }
+    if (this.nativeStatsFlight?.token === token) this.nativeStatsFlight = null;
+
+    // Session cleanup invalidates result consumption, never the underlying native-flight lifetime.
+    if (consumerGeneration !== this.statsGeneration || !this.isCurrentSession(sessionId)) {
+      this.resumeStatsAfterNativeFlight();
       return;
     }
-    const raw = (winner as { value: SanitizedMediaStats | null }).value;
-    this.statsInFlight = null;
-    const sanitized = sanitizeMediaStats(raw);
+
+    const sanitized = sanitizeMediaStats(winner.value);
     if (sanitized && typeof sanitized.bytesSent === 'number') {
       const measured = measuredBitrateBps(this.previousBytesSent, sanitized.bytesSent, this.nowMs());
       this.previousBytesSent = { bytesSent: sanitized.bytesSent, atMs: this.nowMs() };
@@ -518,13 +521,10 @@ export class MediaSessionController {
     }
     if (sanitized) await this.record('media_stats');
     for (const listener of this.listeners) listener();
-    if (this.isCurrentSession(sessionId) && (this.state.type === 'live' || this.state.type === 'publishing' || this.state.type === 'remote_track_attached')) {
-      this.scheduleStats(sessionId);
-    }
+    this.resumeStatsAfterNativeFlight();
   }
 
   private async failMedia(expectedSessionId: string, message: string): Promise<void> {
-    // A delayed failure from a replaced/terminal session must never terminate the fresh session.
     if (!this.isCurrentSession(expectedSessionId)) return;
     const active = this.activeSessionId();
     this.clearRecovery(true);
@@ -534,7 +534,6 @@ export class MediaSessionController {
     this.mediaPhase = 'terminal_media_error';
     this.setState({ type: 'error', message });
     await this.record('media_failed');
-    // Recoverable media failure must not destroy pair trust or the authenticated control session.
   }
   private activeSessionId(): string | null { return this.state.type === 'negotiating' || this.state.type === 'publishing' || this.state.type === 'remote_track_attached' || this.state.type === 'live' || this.state.type === 'reconnecting' ? this.state.sessionId : null; }
   private clearRecovery(resetAttempt: boolean): void { this.recoveryTimer?.cancel(); this.recoveryTimer = null; if (resetAttempt) this.recoveryAttempt = 0; }
@@ -544,12 +543,10 @@ export class MediaSessionController {
   private clearStatsTimer(): void { this.statsTimer?.cancel(); this.statsTimer = null; }
   private clearDeadlines(): void { this.clearInitialDeadline(); this.clearConnectionDeadline(); this.clearFirstFrameDeadline(); this.clearStatsTimer(); }
   private clearStats(): void {
+    this.statsGeneration += 1;
     this.clearStatsTimer();
-    if (this.statsTimeout) {
-      this.statsTimeout.cancel();
-      this.statsTimeout = null;
-    }
-    this.statsInFlight = null;
+    // Do not clear nativeStatsFlight or cancel its presentation timeout. A session teardown cannot cancel
+    // the underlying native operation, so the single-flight token remains occupied until that Promise settles.
     this.stats = null;
     this.liveHealth = 'good';
     this.previousBytesSent = null;
