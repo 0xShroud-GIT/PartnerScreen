@@ -14,8 +14,10 @@ import {
   classifyIceCandidate,
   MEDIA_DISCONNECTED_GRACE_MS,
   MEDIA_KEYFRAME_REQUEST_DELAYS_MS,
+  MEDIA_KEYFRAME_STEADY_RETRY_MS,
   MEDIA_KEYFRAME_TOGGLE_MS,
   MEDIA_RESTART_DELAYS_MS,
+  MEDIA_SIGNAL_RETRY_MS,
   MEDIA_STATS_INTERVAL_MS,
   SCREEN_FPS,
   SCREEN_MAX_BITRATE_BPS,
@@ -84,6 +86,8 @@ interface MediaAuthority {
 interface MediaDiagnostics { append(kind: DiagnosticEventKind): Promise<void>; }
 type Timer = ReturnType<typeof setTimeout>;
 type ByteSample = { atMs: number; bytes: number };
+
+type EndedAwareTrack = { onended?: (() => void) | null };
 
 function numeric(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
@@ -196,7 +200,7 @@ export class MediaSession {
       }
 
       this.localStream = stream;
-      (track as unknown as { onended?: () => void }).onended = () => {
+      (track as unknown as EndedAwareTrack).onended = () => {
         void this.enqueue(async () => {
           if (this.peerSessionId !== sessionId) return;
           await this.record('capture_revoked');
@@ -286,8 +290,12 @@ export class MediaSession {
         this.clearDisconnectedTimer();
         const recovered = this.restartAttempt > 0;
         this.restartAttempt = 0;
-        this.setState({ type: 'live', sessionId, role });
-        if (role === 'requester' && this.remoteTrackSeen && !this.firstFrameSeen) this.scheduleKeyframeRecovery(sessionId);
+        if (role === 'requester' && !this.firstFrameSeen) {
+          this.setState({ type: 'connecting', sessionId, role });
+          if (this.remoteTrackSeen) this.scheduleKeyframeRecovery(sessionId);
+        } else {
+          this.setState({ type: 'live', sessionId, role });
+        }
         if (recovered) void this.record('media_reconnected');
         return;
       }
@@ -367,6 +375,7 @@ export class MediaSession {
         const peer = this.requirePeer(sessionId);
         await peer.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: message.payload.sdp }));
         await this.flushRemoteCandidates(peer);
+        await this.forceKeyframe(sessionId);
       }
     } catch {
       if (message.type !== 'MEDIA_KEYFRAME_REQUEST') await this.scheduleRecovery(sessionId);
@@ -387,18 +396,15 @@ export class MediaSession {
 
   private scheduleKeyframeRecovery(sessionId: string): void {
     if (!sessionId || this.firstFrameSeen || this.keyframeTimer || this.role !== 'requester' || this.peerSessionId !== sessionId) return;
-    if (this.keyframeAttempt >= MEDIA_KEYFRAME_REQUEST_DELAYS_MS.length) {
-      if (this.peer?.connectionState === 'connected') void this.enqueue(() => this.scheduleRecovery(sessionId)).catch(() => undefined);
-      return;
-    }
-    const delay = MEDIA_KEYFRAME_REQUEST_DELAYS_MS[this.keyframeAttempt];
+    const initialAttempt = this.keyframeAttempt < MEDIA_KEYFRAME_REQUEST_DELAYS_MS.length;
+    const delay = initialAttempt ? MEDIA_KEYFRAME_REQUEST_DELAYS_MS[this.keyframeAttempt] : MEDIA_KEYFRAME_STEADY_RETRY_MS;
     this.keyframeTimer = setTimeout(() => {
       this.keyframeTimer = null;
       void this.enqueue(async () => {
         if (this.firstFrameSeen || this.role !== 'requester' || this.peerSessionId !== sessionId) return;
         const product = this.session.getSnapshot();
         if (product.type !== 'Connected' || product.sessionId !== sessionId) return;
-        this.keyframeAttempt += 1;
+        if (this.keyframeAttempt < MEDIA_KEYFRAME_REQUEST_DELAYS_MS.length) this.keyframeAttempt += 1;
         this.keyframeRequests += 1;
         await this.record('media_keyframe_requested');
         await this.session.sendMedia(sessionId, 'MEDIA_KEYFRAME_REQUEST', { reason: 'first_frame' }).catch(() => undefined);
@@ -430,7 +436,14 @@ export class MediaSession {
         try {
           if (current.role === 'sharer') await this.restartAsSharer(sessionId);
           else await this.session.sendMedia(sessionId, 'MEDIA_RESTART_REQUEST', { reason: 'connection_lost' });
-        } catch { await this.scheduleRecovery(sessionId); }
+        } catch {
+          if (this.restartAttempt === attempt) this.restartAttempt = attempt - 1;
+          if (this.peerSessionId !== sessionId || this.restartTimer) return;
+          this.restartTimer = setTimeout(() => {
+            this.restartTimer = null;
+            void this.enqueue(() => this.scheduleRecovery(sessionId)).catch(() => undefined);
+          }, MEDIA_SIGNAL_RETRY_MS);
+        }
       }).catch(() => undefined);
     }, delay);
   }
@@ -506,7 +519,12 @@ export class MediaSession {
     }
     this.stats = next;
     if (!this.firstFrameSeen && this.role === 'requester' && (next.framesDecoded ?? 0) > 0) {
-      this.firstFrameSeen = true; this.clearKeyframeTimer(); await this.record('media_first_frame');
+      this.firstFrameSeen = true;
+      this.clearKeyframeTimer();
+      if (this.peerSessionId && this.peer?.connectionState === 'connected') {
+        this.setState({ type: 'live', sessionId: this.peerSessionId, role: 'requester' });
+      }
+      await this.record('media_first_frame');
     } else if (!this.firstFrameSeen && this.role === 'requester' && this.remoteTrackSeen && this.peerSessionId) {
       this.scheduleKeyframeRecovery(this.peerSessionId);
     }
@@ -526,7 +544,12 @@ export class MediaSession {
     if (this.restartTimer) clearTimeout(this.restartTimer); if (this.statsTimer) clearTimeout(this.statsTimer);
     this.restartTimer = null; this.statsTimer = null;
     const hadCapture = Boolean(this.localStream);
-    this.localStream?.getTracks().forEach((track) => track.stop()); this.localStream = null;
+    const localTracks = this.localStream?.getTracks() ?? [];
+    for (const track of localTracks) {
+      (track as unknown as EndedAwareTrack).onended = null;
+      track.stop();
+    }
+    this.localStream = null;
     this.remoteStream?.getTracks().forEach((track) => track.stop()); this.remoteStream = null; this.remoteStreamURL = null;
     this.closePeer(); this.peerSessionId = null; this.role = null; this.pendingRemoteCandidates = [];
     this.restartAttempt = 0; this.keyframeAttempt = 0; this.keyframeRequests = 0; this.keyframeForces = 0; this.bitrateParametersApplied = false;
