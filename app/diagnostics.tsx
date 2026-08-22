@@ -27,6 +27,7 @@ export default function DiagnosticsScreen() {
         identity,
         events,
         build: getDiagnosticBuildMetadata(),
+        media: appServices.webRtcMediaPort.getPhysicalDiagnosticSnapshot(),
       }));
     } catch {
       // Native/storage/library exception text is deliberately not rendered into product UI.
@@ -54,7 +55,7 @@ export default function DiagnosticsScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text accessibilityRole="header" style={styles.title}>Diagnostics</Text>
-      <Text style={styles.help}>This report is local and sanitized. It omits the full device ID, device name, pair secret, authentication proofs, QR bootstrap material and raw exception text.</Text>
+      <Text style={styles.help}>This report is local and sanitized. It omits the full device ID, device name, pair secret, authentication proofs, QR bootstrap material, raw ICE addresses/candidates and raw exception text.</Text>
 
       {loading || identityLoading ? <View accessibilityLiveRegion="polite" style={styles.loading}><ActivityIndicator accessibilityLabel="Building diagnostic report" /><Text>Building sanitized report…</Text></View> : null}
       {error ? <Text accessibilityRole="alert" accessibilityLiveRegion="assertive" style={styles.error}>{error}</Text> : null}
