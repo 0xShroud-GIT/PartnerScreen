@@ -54,7 +54,7 @@ test('P0-F: production Viewer binds onFrameResolution to setVideoGeometry', () =
 // Blocker 6: Single notification ingress — all mechanisms converge
 test('P0-E: IncomingRequestIngress dedupes same session from multiple mechanisms', () => {
   const ingress = new IncomingRequestIngress();
-  const state = { type: 'IncomingRequest' as const, pair: { partnerDeviceId: 'x', partnerDeviceName: 'y', pairId: 'z', pairedAt: '', partnerDeviceId: '', schemaVersion: 1, protocolVersion: 1, status: 'confirmed' as const }, sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', expiresAt: new Date(Date.now() + 30000).toISOString() };
+  const state = { type: 'IncomingRequest' as const, pair: { partnerDeviceId: 'x', partnerDeviceName: 'y', pairId: 'z', pairedAt: '', schemaVersion: 1, protocolVersion: 1, status: 'confirmed' as const } as any, sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', expiresAt: new Date(Date.now() + 30000).toISOString() };
   let navigations = 0;
   const open = () => { navigations += 1; };
   const sessionId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -161,7 +161,7 @@ test('P0-G: hung getStats does not allow overlap (at most one in-flight)', async
     await twin.flushUntil(() => twin.alice.mediaSessionController.getSnapshot().type === 'live');
     // Mock getStats to never resolve
     let callCount = 0;
-    let resolveHanging: ((value: any) => void) | null = null;
+    let resolveHanging: any = null;
     const originalGetStats = twin.alice.mediaPort.getStats.bind(twin.alice.mediaPort);
     twin.alice.mediaPort.getStats = async (sessionId: string) => {
       callCount += 1;
