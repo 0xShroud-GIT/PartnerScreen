@@ -1,1 +1,11 @@
-fatal: path 'modules/partner-screen-capture/android/src/main/java/com/partnerscreen/capture/RuntimeLabGate.kt' exists on disk, but not in 'tmp/pr11'
+package com.partnerscreen.capture
+
+import android.content.Context
+import android.content.pm.ApplicationInfo
+
+/** Native fail-closed gate for Runtime Laboratory hooks compiled into the module. */
+object RuntimeLabGate {
+  @JvmStatic
+  fun isDebuggable(context: Context): Boolean =
+    (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+}
