@@ -10,7 +10,7 @@ on:
       expected_sha:
         description: 'Exact SHA expected after checkout'
         required: true
-        default: 'e4f07e71cf82a31021e36a2ff9634652c595bdd0'
+        default: 'f44f0d0031fc4f75c3e38a5fc6e387255cfc2722'
 
 permissions:
   contents: read
