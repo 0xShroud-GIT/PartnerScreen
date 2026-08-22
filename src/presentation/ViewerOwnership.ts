@@ -1,27 +1,63 @@
-/** One requester Viewer owner per exact session. Navigation must be idempotent. */
+/** One requester Viewer route per exact session. Reservation happens before navigation. */
 export class ViewerOwnership {
   private sessionId: string | null = null;
-  private refs = 0;
+  private phase: 'idle' | 'reserved' | 'mounted' = 'idle';
 
-  claim(sessionId: string): boolean {
-    if (this.sessionId && this.sessionId !== sessionId) return false;
+  reserve(sessionId: string): boolean {
+    if (!sessionId) return false;
+    if (this.phase !== 'idle') return false;
     this.sessionId = sessionId;
-    this.refs += 1;
-    return this.refs === 1;
+    this.phase = 'reserved';
+    return true;
+  }
+
+  mount(sessionId: string): boolean {
+    if (!sessionId) return false;
+    if (this.phase === 'idle') {
+      this.sessionId = sessionId;
+      this.phase = 'mounted';
+      return true;
+    }
+    if (this.sessionId !== sessionId || this.phase === 'mounted') return false;
+    this.phase = 'mounted';
+    return true;
   }
 
   release(sessionId: string): boolean {
-    if (this.sessionId !== sessionId || this.refs === 0) return false;
-    this.refs -= 1;
-    if (this.refs === 0) {
-      this.sessionId = null;
-      return true;
-    }
-    return false;
+    if (this.sessionId !== sessionId || this.phase === 'idle') return false;
+    this.sessionId = null;
+    this.phase = 'idle';
+    return true;
+  }
+
+  cancelReservation(sessionId: string): boolean {
+    if (this.sessionId !== sessionId || this.phase !== 'reserved') return false;
+    this.sessionId = null;
+    this.phase = 'idle';
+    return true;
   }
 
   isOwner(sessionId: string): boolean {
-    return this.sessionId === sessionId && this.refs > 0;
+    return this.sessionId === sessionId && this.phase === 'mounted';
+  }
+
+  isReservedOrOwner(sessionId: string): boolean {
+    return this.sessionId === sessionId && this.phase !== 'idle';
+  }
+
+  getPhase(sessionId: string): 'idle' | 'reserved' | 'mounted' {
+    return this.sessionId === sessionId ? this.phase : 'idle';
+  }
+}
+
+export function requestViewerNavigation(sessionId: string, navigate: () => void): boolean {
+  if (!viewerOwnership.reserve(sessionId)) return false;
+  try {
+    navigate();
+    return true;
+  } catch (error) {
+    viewerOwnership.cancelReservation(sessionId);
+    throw error;
   }
 }
 
