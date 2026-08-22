@@ -50,17 +50,17 @@ export default function DiagnosticsScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Diagnostics</Text>
+    <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
+      <Text accessibilityRole="header" style={styles.title}>Diagnostics</Text>
       <Text style={styles.help}>Sanitized local diagnostics only. No pair secret, QR material, SDP, ICE address, raw candidate, SSID, BSSID or full device ID is included.</Text>
-      {loading || identityLoading ? <View style={styles.loading}><ActivityIndicator /><Text>Building report…</Text></View> : null}
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {loading || identityLoading ? <View style={styles.loading}><ActivityIndicator color="#ffffff" /><Text style={styles.help}>Building report…</Text></View> : null}
+      {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
       {!loading && !identityLoading && !error ? (
         <>
-          <View style={styles.reportBox}><Text style={styles.report}>{report}</Text></View>
-          <Pressable onPress={() => void copy()} style={styles.primaryButton}><Text style={styles.primaryButtonText}>Copy report</Text></Pressable>
-          {copied ? <Text>Copied.</Text> : null}
-          <Pressable onPress={() => void refresh()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Refresh</Text></Pressable>
+          <View style={styles.reportBox}><Text selectable style={styles.report}>{report}</Text></View>
+          <Pressable accessibilityRole="button" onPress={() => void copy()} style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}><Text style={styles.primaryButtonText}>Copy report</Text></Pressable>
+          {copied ? <Text style={styles.copied}>Copied.</Text> : null}
+          <Pressable accessibilityRole="button" onPress={() => void refresh()} style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}><Text style={styles.secondaryButtonText}>Refresh</Text></Pressable>
         </>
       ) : null}
     </ScrollView>
@@ -68,15 +68,18 @@ export default function DiagnosticsScreen() {
 }
 
 const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: '#0b0d10' },
   container: { flexGrow: 1, gap: 16, padding: 24, paddingBottom: 40 },
-  title: { fontSize: 28, fontWeight: '800' },
-  help: { fontSize: 14, lineHeight: 20, opacity: 0.78 },
+  title: { color: '#ffffff', fontSize: 28, fontWeight: '800' },
+  help: { color: '#b8c0cb', fontSize: 14, lineHeight: 20 },
   loading: { gap: 8, alignItems: 'center' },
-  reportBox: { borderWidth: 1, borderColor: '#777', borderRadius: 12, padding: 14 },
-  report: { fontFamily: 'monospace', fontSize: 13, lineHeight: 19 },
-  primaryButton: { minHeight: 48, justifyContent: 'center', alignItems: 'center', backgroundColor: '#111', borderRadius: 10 },
-  primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  secondaryButton: { minHeight: 48, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#555', borderRadius: 10 },
-  secondaryButtonText: { fontSize: 16, fontWeight: '700' },
-  error: { fontWeight: '700' },
+  reportBox: { backgroundColor: '#11151a', borderWidth: 1, borderColor: '#303741', borderRadius: 12, padding: 14 },
+  report: { color: '#d4dae2', fontFamily: 'monospace', fontSize: 12, lineHeight: 18 },
+  primaryButton: { minHeight: 50, justifyContent: 'center', alignItems: 'center', backgroundColor: '#ffffff', borderRadius: 12 },
+  primaryButtonText: { color: '#0b0d10', fontSize: 16, fontWeight: '700' },
+  secondaryButton: { minHeight: 50, justifyContent: 'center', alignItems: 'center', backgroundColor: '#222831', borderRadius: 12 },
+  secondaryButtonText: { color: '#ffffff', fontSize: 16, fontWeight: '700' },
+  copied: { color: '#8fe0aa', textAlign: 'center', fontWeight: '700' },
+  error: { color: '#ffb5ba', fontWeight: '700', lineHeight: 20 },
+  pressed: { opacity: 0.65 },
 });
