@@ -183,10 +183,18 @@ export class MediaSession {
         audio: false,
         android: { createConfigForDefaultDisplay: true, resolutionScale: scale },
       } as never);
-      const consentResult = await Promise.race([
-        consent.then((granted) => ({ granted: true as const, stream: granted })),
-        new Promise<{ granted: false }>((resolve) => setTimeout(() => resolve({ granted: false }), MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS)),
-      ]);
+      let consentTimer: Timer | null = null;
+      let consentResult: { granted: true; stream: MediaStream } | { granted: false };
+      try {
+        consentResult = await Promise.race([
+          consent.then((granted) => ({ granted: true as const, stream: granted })),
+          new Promise<{ granted: false }>((resolve) => {
+            consentTimer = setTimeout(() => resolve({ granted: false }), MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS);
+          }),
+        ]);
+      } finally {
+        if (consentTimer) clearTimeout(consentTimer);
+      }
       if (!consentResult.granted) {
         // Bounded fail-closed: if Android grants after the app timeout, stop that orphaned projection.
         void consent.then((late) => late.getTracks().forEach((track) => track.stop())).catch(() => undefined);
@@ -284,7 +292,13 @@ export class MediaSession {
 
     peer.ontrack = (event: any) => {
       if (role !== 'requester' || this.peerSessionId !== sessionId || event.track.kind !== 'video') return;
-      const stream = event.streams?.[0] ?? new MediaStream([event.track]);
+      const stream = event.streams?.[0] as MediaStream | undefined;
+      if (!stream) {
+        // Chirp always sends addTrack(track, stream). Do not synthesize a MediaStream around a remote
+        // track: react-native-webrtc has a confirmed Android New Architecture race in that path.
+        void this.enqueue(() => this.fail(sessionId, 'WebRTC delivered a video track without its negotiated stream.', 'media_failed')).catch(() => undefined);
+        return;
+      }
       this.remoteStream = stream;
       this.remoteStreamURL = stream.toURL();
       if (!this.remoteTrackSeen) void this.record('media_remote_track');
@@ -529,7 +543,8 @@ export class MediaSession {
       track.stop();
     }
     this.localStream = null;
-    this.remoteStream?.getTracks().forEach((track) => track.stop());
+    // Closing the PeerConnection owns remote-track teardown. Avoid manually stopping remote tracks;
+    // react-native-webrtc maps remote track state back through the peer connection.
     this.remoteStream = null;
     this.remoteStreamURL = null;
     this.closePeer();
