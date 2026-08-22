@@ -12,10 +12,13 @@ export interface RequestNotificationPort {
   subscribeOpened(listener: (sessionId: string) => void): () => void;
 }
 
+type NativeNotificationCapability = 'granted' | 'runtime_permission_required' | 'app_disabled' | 'channel_disabled';
+
 type NativeModule = {
   showRequestNotification(sessionId: string, partnerName: string): Promise<boolean>;
   clearRequestNotification(): Promise<boolean>;
   hasNotificationPermission(): boolean;
+  notificationCapability?(): NativeNotificationCapability | string;
   consumeLaunchSessionId(): Promise<string | null>;
   addListener(eventName: 'onIncomingRequestOpened', listener: (event: IncomingRequestOpenEvent) => void): { remove(): void };
 };
@@ -36,6 +39,7 @@ function getNative(): NativeModule | null {
 export class ExpoRequestNotification implements RequestNotificationPort {
   private openedListeners = new Set<(sessionId: string) => void>();
   private nativeSub: { remove(): void } | null = null;
+  private lastPromptResult: NotificationPermissionState | null = null;
 
   constructor() {
     const native = getNative();
@@ -74,11 +78,34 @@ export class ExpoRequestNotification implements RequestNotificationPort {
 
   async readPermissionState(): Promise<NotificationPermissionState> {
     if (Platform.OS !== 'android') return 'denied';
+    const native = getNative();
+    if (native?.notificationCapability) {
+      try {
+        const capability = native.notificationCapability();
+        if (capability === 'granted') {
+          this.lastPromptResult = null;
+          return 'granted';
+        }
+        if (capability === 'channel_disabled') return 'channel_disabled';
+        if (capability === 'app_disabled') return 'denied';
+        if (capability === 'runtime_permission_required') {
+          if (this.lastPromptResult === 'denied' || this.lastPromptResult === 'dismissed') return this.lastPromptResult;
+          return 'requestable';
+        }
+      } catch {
+        // Fall back to the React Native permission API below.
+      }
+    }
+
     const apiLevel = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
     if (!Number.isFinite(apiLevel) || apiLevel < 33) return 'granted';
     const permission = PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS;
     try {
-      if (await PermissionsAndroid.check(permission)) return 'granted';
+      if (await PermissionsAndroid.check(permission)) {
+        this.lastPromptResult = null;
+        return 'granted';
+      }
+      if (this.lastPromptResult === 'denied' || this.lastPromptResult === 'dismissed') return this.lastPromptResult;
       return 'requestable';
     } catch {
       return 'unknown';
@@ -93,10 +120,18 @@ export class ExpoRequestNotification implements RequestNotificationPort {
     const permission = PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS;
     try {
       const result = await PermissionsAndroid.request(permission);
-      if (result === PermissionsAndroid.RESULTS.GRANTED) return 'granted';
-      if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) return 'denied';
+      if (result === PermissionsAndroid.RESULTS.GRANTED) {
+        this.lastPromptResult = null;
+        return 'granted';
+      }
+      if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+        this.lastPromptResult = 'denied';
+        return 'denied';
+      }
+      this.lastPromptResult = 'dismissed';
       return 'dismissed';
     } catch {
+      this.lastPromptResult = 'unknown';
       return 'unknown';
     }
   }
