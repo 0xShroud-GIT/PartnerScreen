@@ -1,0 +1,295 @@
+name: Runtime Laboratory native gates
+
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: Qualification layer to run
+        required: true
+        default: native
+        type: choice
+        options:
+          - native
+          - webrtc-loopback
+          - two-emulator
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-lab-native-${{ github.ref }}-${{ inputs.level }}
+  cancel-in-progress: true
+
+env:
+  PARTNERSCREEN_BUILD_COMMIT: ${{ github.sha }}
+
+jobs:
+  native:
+    name: Native JVM / Android unit tests
+    if: ${{ inputs.level == 'native' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PARTNERSCREEN_BUILD_COMMIT }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+
+      - name: Pin npm
+        run: npm install --global npm@10.9.8
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Install Android SDK requirements
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [[ -z "$SDKMANAGER" ]]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -path '*/bin/sdkmanager' 2>/dev/null | sort -V | tail -1)"
+          fi
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Generate Android project for native tests
+        env:
+          CI: '1'
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Run native unit tests
+        run: ./android/gradlew -p android testDebugUnitTest --no-daemon --stacktrace
+
+  webrtc-loopback:
+    name: Real WebRTC synthetic-frame loopback
+    if: ${{ inputs.level == 'webrtc-loopback' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PARTNERSCREEN_BUILD_COMMIT }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+
+      - name: Pin npm
+        run: npm install --global npm@10.9.8
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Install dependencies and prebuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          CI=1 npx expo prebuild --platform android --no-install
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run WebRTC loopback instrumentation
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        with:
+          api-level: 34
+          target: aosp_atd
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          disable-animations: true
+          script: >-
+            ./android/gradlew -p android connectedDebugAndroidTest --no-daemon --stacktrace -Pandroid.testInstrumentationRunnerArguments.class=com.partnerscreen.capture.WebRtcLoopbackTest
+
+      - name: Upload instrumentation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-lab-webrtc-${{ env.PARTNERSCREEN_BUILD_COMMIT }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            android/**/build/reports/androidTests/**
+            android/**/build/outputs/androidTest-results/**
+
+  two-emulator:
+    name: Two-emulator product path
+    if: ${{ inputs.level == 'two-emulator' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      PARTNERSCREEN_ABIS: x86_64
+      EXPO_PUBLIC_PARTNERSCREEN_RUNTIME_LAB: '1'
+      EXPO_PUBLIC_PARTNERSCREEN_TEST_CAPTURE: synthetic
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PARTNERSCREEN_BUILD_COMMIT }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+
+      - name: Pin npm
+        run: npm install --global npm@10.9.8
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install Android emulator, SDK and two-device system image
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [[ -z "$SDKMANAGER" ]]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -path '*/bin/sdkmanager' 2>/dev/null | sort -V | tail -1)"
+          fi
+          AVDMANAGER="$(command -v avdmanager || true)"
+          if [[ -z "$AVDMANAGER" ]]; then
+            AVDMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -path '*/bin/avdmanager' 2>/dev/null | sort -V | tail -1)"
+          fi
+          test -x "$SDKMANAGER"
+          test -x "$AVDMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" \
+            "emulator" \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "system-images;android-36;google_apis;x86_64"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "EMULATOR_BIN=$SDK_ROOT/emulator/emulator" >> "$GITHUB_ENV"
+          echo "AVDMANAGER=$AVDMANAGER" >> "$GITHUB_ENV"
+
+      - name: Verify multi-device emulator generation
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$($EMULATOR_BIN -version 2>&1 | sed -nE 's/.*version ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -n1)"
+          test -n "$version"
+          minimum="37.1.11"
+          if [[ "$(printf '%s\n%s\n' "$minimum" "$version" | sort -V | head -n1)" != "$minimum" ]]; then
+            echo "Android Emulator $minimum+ required for same-host multi-device networking; found $version" >&2
+            exit 1
+          fi
+          echo "Android Emulator $version"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Runtime Lab x86_64 development APK
+        run: npm run build:dev-apk
+
+      - name: Resolve Runtime Lab APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(artifacts/build-metadata/*.apk)
+          if (( ${#apks[@]} != 1 )); then
+            echo "Expected exactly one Runtime Lab APK, found ${#apks[@]}" >&2
+            exit 1
+          fi
+          echo "APK_PATH=${apks[0]}" >> "$GITHUB_ENV"
+          sha256sum "${apks[0]}" | tee artifacts/build-metadata/RUNTIME_LAB_SHA256SUMS.txt
+
+      - name: Create two distinct AVDs
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="system-images;android-36;google_apis;x86_64"
+          printf 'no\n' | "$AVDMANAGER" create avd --force --name partnerscreen-lab-a --package "$image" --device pixel_6
+          printf 'no\n' | "$AVDMANAGER" create avd --force --name partnerscreen-lab-b --package "$image" --device pixel_6
+
+      - name: Install Maestro CLI 2.7.0 and QR decoder
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y zbar-tools
+          curl -fsSL "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+          "$HOME/.maestro/bin/maestro" --version
+
+      - name: Boot both emulators
+        shell: bash
+        run: |
+          set -euo pipefail
+          common=(-no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -no-metrics)
+          "$EMULATOR_BIN" @partnerscreen-lab-a -port 5554 "${common[@]}" >artifacts/emulator-a.log 2>&1 &
+          echo $! > artifacts/emulator-a.pid
+          "$EMULATOR_BIN" @partnerscreen-lab-b -port 5556 "${common[@]}" >artifacts/emulator-b.log 2>&1 &
+          echo $! > artifacts/emulator-b.pid
+          adb -s emulator-5554 wait-for-device
+          adb -s emulator-5556 wait-for-device
+          for serial in emulator-5554 emulator-5556; do
+            timeout 180 bash -c "until [[ \"\$(adb -s $serial shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r')\" == 1 ]]; do sleep 2; done"
+            adb -s "$serial" shell settings put global window_animation_scale 0
+            adb -s "$serial" shell settings put global transition_animation_scale 0
+            adb -s "$serial" shell settings put global animator_duration_scale 0
+          done
+
+      - name: Run two-emulator PartnerScreen gate
+        shell: bash
+        env:
+          ADB_A: emulator-5554
+          ADB_B: emulator-5556
+          MAESTRO_BIN: maestro
+        run: bash scripts/runtime-lab-two-emulators.sh
+
+      - name: Upload Runtime Lab evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-lab-two-emulator-${{ env.PARTNERSCREEN_BUILD_COMMIT }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            artifacts/build-metadata/RUNTIME_LAB_SHA256SUMS.txt
+            artifacts/emulator-a.log
+            artifacts/emulator-b.log

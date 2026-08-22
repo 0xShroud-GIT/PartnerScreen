@@ -7,6 +7,7 @@ import { useMediaSession } from '../src/presentation/useMediaSession';
 import { useSession } from '../src/presentation/useSession';
 import { appServices } from '../src/application/AppServices';
 import { displayedVideoSize, type VideoGeometry } from '../src/platform/pip/videoGeometry';
+import { viewerOwnership } from '../src/presentation/ViewerOwnership';
 
 export default function ViewerScreen() {
   const session = useSession();
@@ -20,8 +21,7 @@ export default function ViewerScreen() {
     ? media.state
     : null;
   const rendererReady = rendererTrackState !== null;
-  // A replacement remote track inside the same session must create a fresh renderer lifecycle
-  // so WebRTC's first-frame callback is earned again instead of inheriting stale LIVE state.
+  // A replacement remote track inside the same session creates a fresh renderer lifecycle.
   const rendererEpoch = rendererTrackState?.trackEpoch ?? 0;
 
   const [isPip, setIsPip] = useState(false);
@@ -55,34 +55,45 @@ export default function ViewerScreen() {
       return true;
     });
     return () => subscription.remove();
-  });
+  }, [stopSession]);
 
-  // Viewer keep-awake: only while dedicated viewer is active for a valid requester session.
-  // FLAG_KEEP_SCREEN_ON is scoped to the viewer Activity/window and released on unmount/session end.
+  // Viewer navigation is reserved before router.push. This mount adopts that exact reservation.
   useEffect(() => {
     if (!requesterSessionId) return;
+    const mounted = viewerOwnership.mount(requesterSessionId);
+    if (!mounted) {
+      // A duplicate route must not become a second renderer/keep-awake owner.
+      if (viewerOwnership.isOwner(requesterSessionId)) router.back();
+      else returnHome();
+      return;
+    }
+
     void appServices.diagnosticsRepository.append('viewer_opened').catch(() => undefined);
     void appServices.keepAwakePort.enable().then((enabled) => {
       if (enabled) void appServices.diagnosticsRepository.append('keep_awake_enabled').catch(() => undefined);
     });
+
     return () => {
+      const released = viewerOwnership.release(requesterSessionId);
+      if (!released) return;
       void appServices.keepAwakePort.disable().then((disabled) => {
         if (disabled) void appServices.diagnosticsRepository.append('keep_awake_disabled').catch(() => undefined);
       });
       void appServices.diagnosticsRepository.append('viewer_closed').catch(() => undefined);
     };
-  }, [requesterSessionId]);
+  }, [requesterSessionId, returnHome]);
 
-  // PiP mode tracking to keep video rendering in PiP while session active.
+  // Geometry belongs to an exact session/remote-track epoch. Never reuse it for replacement media.
+  useEffect(() => {
+    setVideoGeometry(null);
+  }, [requesterSessionId, rendererEpoch]);
+
   useEffect(() => {
     const sub = appServices.pipPort.subscribe((event) => {
       setIsPip(event.isInPictureInPictureMode);
     });
     return () => sub();
   }, []);
-
-  // Explicit PiP entry via button is preferred for reliability; auto-enter on background is omitted for first release.
-  // Viewer remains awake via keep-awake while foreground; background handling is via system PiP if user tapped.
 
   useEffect(() => {
     if (!isPip || !videoSize) return;
@@ -110,7 +121,7 @@ export default function ViewerScreen() {
             ? media.state.message
             : 'Connecting…';
 
-  const canEnterPip = appServices.pipPort.supportsPip() && rendererReady && !!requesterSessionId && videoSize !== null;
+  const canEnterPip = appServices.pipPort.supportsPip() && rendererReady && videoSize !== null;
 
   return (
     <View accessibilityLabel="Trusted partner screen viewer" style={styles.root}>
@@ -124,6 +135,10 @@ export default function ViewerScreen() {
             sessionId={requesterSessionId}
             style={styles.video}
             onFirstFrame={(event) => { void media.rendererFirstFrame(event.nativeEvent.sessionId, rendererEpoch); }}
+            onFrameResolution={(event) => {
+              const { width, height, rotation } = event.nativeEvent;
+              setVideoGeometry({ width, height, rotation });
+            }}
           />
         ) : (
           <View style={styles.center}>

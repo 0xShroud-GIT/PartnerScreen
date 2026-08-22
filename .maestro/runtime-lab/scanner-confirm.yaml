@@ -1,0 +1,8 @@
+appId: com.partnerscreen.app
+---
+- tapOn: "Scan partner QR"
+- extendedWaitUntil:
+    visible: "Authenticated phone"
+    timeout: 15000
+- assertVisible: "${EXPECTED_PARTNER}"
+- tapOn: "Confirm this phone"

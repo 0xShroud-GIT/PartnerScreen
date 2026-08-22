@@ -4,6 +4,7 @@ import type { PairTrustMetadata } from '../domain/pairing/PairTrustRepository';
 import { CONTROL_REQUEST_TIMEOUT_MS, isMediaControlMessageType, type AnyControlMessage, type AnyMediaControlMessage, type ControlMessageType, type ControlPayloadMap, type MediaControlMessageType } from '../protocol/ControlMessage';
 import type { ControlSessionEvent, ControlTrustContext } from '../control/ControlSession';
 import type { PendingRequestRecord } from '../request/PendingRequestStore';
+import { systemRuntimeScheduler, type RuntimeScheduler, type RuntimeTimer } from '../runtime/RuntimeScheduler';
 import { isBasePairedState, type SessionState } from './SessionState';
 
 export interface SessionDiagnostics { append(kind: DiagnosticEventKind): Promise<void>; }
@@ -25,7 +26,7 @@ export class SessionController {
   private readonly mediaListeners = new Set<(message: AnyMediaControlMessage) => void>();
   private pair: PairTrustMetadata | null = null;
   private lastAvailability: AvailabilitySnapshot = { kind: 'inactive' };
-  private timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  private timeoutHandle: RuntimeTimer | null = null;
   private operationQueue: Promise<void> = Promise.resolve();
   private readonly unsubscribeControl: () => void;
 
@@ -36,6 +37,7 @@ export class SessionController {
     private readonly control: SessionControlChannel,
     private readonly diagnostics: SessionDiagnostics,
     private readonly nowMs: () => number = () => Date.now(),
+    private readonly scheduler: RuntimeScheduler = systemRuntimeScheduler,
   ) {
     this.unsubscribeControl = control.subscribe((event) => { void this.enqueue(() => this.handleControlEvent(event)).catch(() => undefined); });
   }
@@ -157,9 +159,9 @@ export class SessionController {
   private async rejectInvalidTransition(pair: PairTrustMetadata): Promise<void> {
     await this.control.send('SESSION_ERROR', { reason: 'invalid_transition' }).catch(() => undefined); await this.control.close().catch(() => undefined); await this.pendingStore.clear().catch(() => undefined); this.clearTimeout(); this.setState(this.baseState(pair)); await this.record('session_error');
   }
-  private scheduleTimeout(sessionId: string, direction: 'incoming' | 'outgoing', delayMs: number): void { this.clearTimeout(); this.timeoutHandle = setTimeout(() => { void this.enqueue(async () => { if ((this.state.type !== 'IncomingRequest' && this.state.type !== 'OutgoingRequest') || this.state.sessionId !== sessionId) return; const pair = this.state.pair; await this.pendingStore.clear().catch(() => undefined); if (direction === 'outgoing') await this.control.send('REQUEST_CANCEL', { reason: 'timeout' }).catch(() => undefined); else await this.control.send('SESSION_ERROR', { reason: 'timeout' }).catch(() => undefined); await this.control.close().catch(() => undefined); this.setState(this.baseState(pair)); await this.record('session_timeout'); }); }, Math.max(1, delayMs)); }
+  private scheduleTimeout(sessionId: string, direction: 'incoming' | 'outgoing', delayMs: number): void { this.clearTimeout(); this.timeoutHandle = this.scheduler.schedule(Math.max(1, delayMs), () => { void this.enqueue(async () => { if ((this.state.type !== 'IncomingRequest' && this.state.type !== 'OutgoingRequest') || this.state.sessionId !== sessionId) return; const pair = this.state.pair; await this.pendingStore.clear().catch(() => undefined); if (direction === 'outgoing') await this.control.send('REQUEST_CANCEL', { reason: 'timeout' }).catch(() => undefined); else await this.control.send('SESSION_ERROR', { reason: 'timeout' }).catch(() => undefined); await this.control.close().catch(() => undefined); this.setState(this.baseState(pair)); await this.record('session_timeout'); }); }); }
   private baseState(pairOverride?: PairTrustMetadata): SessionState { const pair = pairOverride ?? this.pair; if (!pair) return { type: 'Unpaired' }; if (this.lastAvailability.kind === 'available' && this.lastAvailability.pair.pairId === pair.pairId) return { type: 'PairedAvailable', pair, endpoint: this.lastAvailability.endpoint }; return { type: 'PairedOffline', pair }; }
-  private clearTimeout(): void { if (this.timeoutHandle) clearTimeout(this.timeoutHandle); this.timeoutHandle = null; }
+  private clearTimeout(): void { this.timeoutHandle?.cancel(); this.timeoutHandle = null; }
   private record(kind: DiagnosticEventKind): Promise<void> { return this.diagnostics.append(kind).catch(() => undefined); }
   private setState(next: SessionState): void { this.state = next; for (const listener of this.listeners) listener(); }
   private enqueue(operation: () => Promise<void>): Promise<void> { const result = this.operationQueue.then(operation); this.operationQueue = result.then(() => undefined, () => undefined); return result; }

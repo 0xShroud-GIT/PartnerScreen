@@ -1,0 +1,10 @@
+appId: com.partnerscreen.app
+---
+- launchApp:
+    clearState: true
+- assertVisible: "PartnerScreen"
+- tapOn: "This device's name"
+- inputText: "${DEVICE_NAME}"
+- tapOn: "Save device name"
+- assertVisible: "Show pairing QR"
+- assertVisible: "Scan partner QR"

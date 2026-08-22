@@ -12,3 +12,17 @@ export function shouldOpenIncomingRequest(state: SessionState, sessionId: string
   if (!sessionId) return false;
   return state.type === 'IncomingRequest' && state.sessionId.toLowerCase() === sessionId.toLowerCase();
 }
+
+/** Single cold/warm ingress owner. Stale notification IDs do nothing. */
+export class IncomingRequestIngress {
+  private lastRouted: string | null = null;
+
+  route(sessionId: string | null | undefined, state: SessionState, open: () => void): boolean {
+    if (!shouldOpenIncomingRequest(state, sessionId) || !sessionId) return false;
+    const normalized = sessionId.toLowerCase();
+    if (this.lastRouted === normalized) return false;
+    this.lastRouted = normalized;
+    open();
+    return true;
+  }
+}

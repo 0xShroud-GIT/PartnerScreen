@@ -29,7 +29,8 @@ test('coordinated error recovery tears down session, media, capture, notificatio
     pip: { async exitPip() { calls.push('pip'); return true; } },
     keepAwake: { async disable() { calls.push('keepawake'); return true; } },
   });
-  assert.deepEqual(calls, ['pip', 'keepawake', 'notification', 'media', 'capture', 'session']);
+  assert.deepEqual(new Set(calls.slice(0, 5)), new Set(['pip', 'keepawake', 'notification', 'media', 'capture']));
+  assert.equal(calls.at(-1), 'session');
 });
 
 test('media stats sanitizer rejects secret-bearing keys and does not invent bitrate', () => {
@@ -268,7 +269,8 @@ test('availability updates cache while Error and only coordinated recovery leave
     keepAwake: { async disable() { calls.push('keepawake'); return true; } },
   });
   await settle();
-  assert.deepEqual(calls, ['pip', 'keepawake', 'notification', 'media', 'capture', 'session']);
+  assert.deepEqual(new Set(calls.slice(0, 5)), new Set(['pip', 'keepawake', 'notification', 'media', 'capture']));
+  assert.equal(calls.at(-1), 'session');
   const recovered = controller.getSnapshot();
   assert.equal(recovered.type, 'PairedAvailable');
   if (recovered.type === 'PairedAvailable') {

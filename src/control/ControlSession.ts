@@ -56,6 +56,7 @@ export class ControlSession {
       if (!same) await this.deactivateNow();
       this.context = { ...context, pairSecretHex: context.pairSecretHex.toLowerCase() };
       await this.crypto.assertRuntimeCompatible();
+      await this.transport.startTrustedPresence?.().catch(() => undefined);
       await this.ensureListeningNow();
     });
   }
@@ -184,7 +185,7 @@ export class ControlSession {
     this.listenerEndpoint = await this.transport.startListener();
     return this.listenerEndpoint;
   }
-  private async deactivateNow(): Promise<void> { await this.closeActiveNow(); const listener = this.listenerEndpoint; this.listenerEndpoint = null; if (listener) await this.transport.stopListener(listener.listenerId).catch(() => undefined); this.context = null; }
+  private async deactivateNow(): Promise<void> { await this.closeActiveNow(); const listener = this.listenerEndpoint; this.listenerEndpoint = null; if (listener) await this.transport.stopListener(listener.listenerId).catch(() => undefined); await this.transport.stopTrustedPresence?.().catch(() => undefined); this.context = null; }
   private async closeActiveNow(): Promise<void> { const active = this.active; if (!active) return; this.active = null; this.clearHandshake(active); active.authReject?.(new Error('Control session closed.')); active.authReject = null; active.authResolve = null; try { await this.transport.close(active.connectionId); } catch { /* best effort */ } }
   private clearHandshake(active: ActiveConnection): void { if (active.handshakeTimer) clearTimeout(active.handshakeTimer); active.handshakeTimer = null; }
   private enqueue(operation: () => Promise<void>): Promise<void> { const result = this.operationQueue.then(operation); this.operationQueue = result.then(() => undefined, () => undefined); return result; }

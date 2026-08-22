@@ -29,12 +29,31 @@ class FakeDiscovery implements PartnerDiscovery {
   stopCount = 0;
   failStart = false;
   failProbe = false;
+  deferProbe = false;
+  private readonly deferredProbes: Array<{ host: string; port: number; resolve: () => void; reject: (error: Error) => void }> = [];
   async prepareAdvertisement(): Promise<DiscoveryAdvertisementPreparation> { return this.preparation; }
   async start(advertisementId: string, peerHint: string, proof: string): Promise<DiscoveryRegistration> {
     if (this.failStart) throw new Error('NSD unavailable: raw native detail');
     this.startArgs = { advertisementId, peerHint, proof }; return this.registration;
   }
-  async probe(host: string, port: number): Promise<void> { this.probeCalls.push({ host, port }); if (this.failProbe) throw new Error('unreachable'); }
+  async probe(host: string, port: number): Promise<void> {
+    this.probeCalls.push({ host, port });
+    if (this.failProbe) throw new Error('unreachable');
+    if (this.deferProbe) {
+      await new Promise<void>((resolve, reject) => { this.deferredProbes.push({ host, port, resolve, reject }); });
+    }
+  }
+  resolveDeferredProbes(predicate?: (call: { host: string; port: number }) => boolean): void {
+    const remaining: typeof this.deferredProbes = [];
+    for (const pending of this.deferredProbes.splice(0)) {
+      if (!predicate || predicate(pending)) pending.resolve();
+      else remaining.push(pending);
+    }
+    this.deferredProbes.push(...remaining);
+  }
+  rejectDeferredProbes(): void {
+    for (const pending of this.deferredProbes.splice(0)) pending.reject(new Error('unreachable'));
+  }
   async stop(): Promise<void> { this.stopCount += 1; }
   subscribe(listener: (event: PartnerDiscoveryEvent) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   emit(event: PartnerDiscoveryEvent): void { for (const listener of this.listeners) listener(event); }
@@ -48,9 +67,22 @@ function makeHarness() {
   const service = new AvailabilityService(new FakeSecrets(secret), diagnostics, discovery, authenticator, control);
   return { discovery, diagnostics, authenticator, control, service };
 }
-async function trustedRemote(authenticator: HmacDiscoveryAuthenticator) {
-  const remote = { nonce: '20'.repeat(16), host: '192.168.18.11', port: 42002, controlPort: 45002 };
-  return { serviceName: 'PartnerScreen-remote', host: remote.host, port: remote.port, peerHint: await authenticator.derivePeerHint(secret, remote.nonce), nonce: remote.nonce, proof: await authenticator.createProof(secret, remote) };
+async function trustedRemote(authenticator: HmacDiscoveryAuthenticator, overrides?: Partial<{ nonce: string; host: string; port: number; controlPort: number; serviceName: string }>) {
+  const remote = {
+    nonce: overrides?.nonce ?? '20'.repeat(16),
+    host: overrides?.host ?? '192.168.18.11',
+    port: overrides?.port ?? 42002,
+    controlPort: overrides?.controlPort ?? 45002,
+  };
+  return {
+    serviceName: overrides?.serviceName ?? 'PartnerScreen-remote',
+    host: remote.host,
+    port: remote.port,
+    peerHint: await authenticator.derivePeerHint(secret, remote.nonce),
+    nonce: remote.nonce,
+    proof: await authenticator.createProof(secret, remote),
+    controlPort: remote.controlPort,
+  };
 }
 
 test('availability binds the dynamic control port into authenticated proof and exposes it only after probe', async () => {
@@ -64,8 +96,25 @@ test('availability binds the dynamic control port into authenticated proof and e
   const state = service.getSnapshot();
   assert.equal(state.kind, 'available');
   if (state.kind === 'available') assert.deepEqual(state.endpoint, { host: '192.168.18.11', port: 45002 });
-  assert.deepEqual(discovery.probeCalls, [{ host: '192.168.18.11', port: 42002 }]);
+  assert.deepEqual(discovery.probeCalls, [{ host: '192.168.18.11', port: 45002 }]);
   assert.ok(diagnostics.events.includes('availability_partner_found'));
+});
+
+test('PairedAvailable requires the exact authenticated control endpoint, never the NSD probe port', async () => {
+  const { discovery, authenticator, service } = makeHarness();
+  await service.activate(pair);
+  const remote = await trustedRemote(authenticator);
+  discovery.emit({ type: 'service_resolved', service: remote });
+  await settle();
+  const state = service.getSnapshot();
+  assert.equal(state.kind, 'available');
+  if (state.kind === 'available') {
+    assert.notEqual(state.endpoint.port, remote.port);
+    assert.equal(state.endpoint.port, remote.controlPort);
+    assert.equal(state.endpoint.host, remote.host);
+  }
+  assert.equal(discovery.probeCalls.some((call) => call.port === remote.port), false);
+  assert.deepEqual(discovery.probeCalls, [{ host: remote.host, port: remote.controlPort }]);
 });
 
 test('tampered control port proof, wrong hint, invalid proof, and local advertisement stay offline', async () => {
@@ -152,4 +201,85 @@ test('a local control-listener replacement re-advertises availability with a fre
   discovery.emit({ type: 'service_resolved', service: await trustedRemote(authenticator) }); await settle();
   assert.equal(service.getSnapshot().kind, 'available');
   service.dispose();
+});
+
+test('a stale control-endpoint probe cannot become available after a newer generation is proven', async () => {
+  const { discovery, authenticator, service } = makeHarness();
+  await service.activate(pair);
+  discovery.deferProbe = true;
+  const stale = await trustedRemote(authenticator, { nonce: '30'.repeat(16), host: '192.168.18.12', port: 42003, controlPort: 45003, serviceName: 'PartnerScreen-remote-old' });
+  discovery.emit({ type: 'service_resolved', service: stale });
+  await settle();
+  assert.equal(service.getSnapshot().kind, 'offline');
+  const fresh = await trustedRemote(authenticator);
+  discovery.emit({ type: 'service_resolved', service: fresh });
+  await settle();
+  discovery.resolveDeferredProbes((call) => call.port === fresh.controlPort);
+  await settle();
+  const available = service.getSnapshot();
+  assert.equal(available.kind, 'available');
+  if (available.kind === 'available') assert.deepEqual(available.endpoint, { host: '192.168.18.11', port: 45002 });
+  discovery.resolveDeferredProbes((call) => call.port === stale.controlPort);
+  await settle();
+  const afterStale = service.getSnapshot();
+  assert.equal(afterStale.kind, 'available');
+  if (afterStale.kind === 'available') assert.deepEqual(afterStale.endpoint, { host: '192.168.18.11', port: 45002 });
+});
+
+test('same service with a replaced control port immediately unpublishes the stale endpoint', async () => {
+  const { discovery, authenticator, service } = makeHarness();
+  await service.activate(pair);
+  const first = await trustedRemote(authenticator);
+  discovery.emit({ type: 'service_resolved', service: first });
+  await settle();
+  assert.equal(service.getSnapshot().kind, 'available');
+  const replacement = await trustedRemote(authenticator, { nonce: '50'.repeat(16), port: 42005, controlPort: 45005, serviceName: first.serviceName });
+  discovery.emit({ type: 'service_resolved', service: replacement });
+  await settle();
+  const after = service.getSnapshot();
+  assert.equal(after.kind, 'available');
+  if (after.kind === 'available') assert.deepEqual(after.endpoint, { host: replacement.host, port: replacement.controlPort });
+  assert.ok(discovery.probeCalls.some((call) => call.port === replacement.controlPort));
+});
+
+test('failed current listener invalidates availability; a stale listener error does not invalidate the replacement', async () => {
+  const { discovery, authenticator, control, service } = makeHarness();
+  await service.activate(pair);
+  discovery.emit({ type: 'service_resolved', service: await trustedRemote(authenticator) });
+  await settle();
+  assert.equal(service.getSnapshot().kind, 'available');
+  const startsBefore = control.ensureCalls;
+  control.emitChange();
+  await settle();
+  assert.equal(service.getSnapshot().kind, 'offline');
+  assert.ok(control.ensureCalls > startsBefore);
+  discovery.emit({ type: 'service_resolved', service: await trustedRemote(authenticator) });
+  await settle();
+  assert.equal(service.getSnapshot().kind, 'available');
+  const ensureAfterReplacement = control.ensureCalls;
+  assert.equal(control.ensureCalls, ensureAfterReplacement);
+});
+
+test('slow reachability of an older service does not block a newer valid control endpoint', async () => {
+  const { discovery, authenticator, service } = makeHarness();
+  await service.activate(pair);
+  discovery.deferProbe = true;
+  const older = await trustedRemote(authenticator, { nonce: '40'.repeat(16), host: '192.168.18.13', port: 42004, controlPort: 45004, serviceName: 'PartnerScreen-remote-slow' });
+  discovery.emit({ type: 'service_resolved', service: older });
+  await settle();
+  assert.equal(service.getSnapshot().kind, 'offline');
+  const newer = await trustedRemote(authenticator);
+  discovery.emit({ type: 'service_resolved', service: newer });
+  await settle();
+  assert.equal(discovery.probeCalls.length, 2);
+  discovery.resolveDeferredProbes((call) => call.port === newer.controlPort);
+  await settle();
+  const state = service.getSnapshot();
+  assert.equal(state.kind, 'available');
+  if (state.kind === 'available') assert.deepEqual(state.endpoint, { host: '192.168.18.11', port: 45002 });
+  discovery.resolveDeferredProbes((call) => call.port === older.controlPort);
+  await settle();
+  const afterSlow = service.getSnapshot();
+  assert.equal(afterSlow.kind, 'available');
+  if (afterSlow.kind === 'available') assert.deepEqual(afterSlow.endpoint, { host: '192.168.18.11', port: 45002 });
 });

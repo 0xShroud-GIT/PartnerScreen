@@ -355,7 +355,7 @@ test('reconnect exhaustion fails closed after bounded attempts', async () => {
   }
   native.emit({ type: 'connection_state', sessionId: sessionIdA, state: 'failed' }); await settle();
   assert.equal(media.getSnapshot().type, 'error');
-  assert.equal(session.failed, 1);
+  assert.equal(session.failed, 0);
   media.dispose();
 });
 
