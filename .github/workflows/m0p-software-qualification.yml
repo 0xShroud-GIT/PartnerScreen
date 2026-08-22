@@ -27,13 +27,14 @@ jobs:
         with:
           ref: ${{ inputs.target_ref }}
 
-      - name: Verify exact target SHA
+      - name: Verify exact target SHA and pin build provenance
         shell: bash
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
           echo "Target SHA: $actual"
           test "$actual" = "${{ inputs.expected_sha }}"
+          echo "PARTNERSCREEN_BUILD_COMMIT=$actual" >> "$GITHUB_ENV"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -78,4 +79,6 @@ jobs:
         run: npm run deps:check
 
 # Manual software-only gate for Mission 0P.
+# PARTNERSCREEN_BUILD_COMMIT is pinned to the checked-out target so Expo config
+# reports the source under qualification instead of the workflow-definition SHA.
 # Intentionally NO Expo prebuild, Gradle, APK, emulator, Maestro, or device steps.
