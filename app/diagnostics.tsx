@@ -27,19 +27,16 @@ export default function DiagnosticsScreen() {
         identity,
         events,
         build: getDiagnosticBuildMetadata(),
-        media: appServices.webRtcMediaPort.getPhysicalDiagnosticSnapshot(),
+        media: appServices.mediaSession.getDiagnosticSnapshot(),
       }));
     } catch {
-      // Native/storage/library exception text is deliberately not rendered into product UI.
       setError(REPORT_FAILURE);
     } finally {
       setLoading(false);
     }
   }, [identity]);
 
-  useEffect(() => {
-    if (!identityLoading) void refresh();
-  }, [identityLoading, refresh]);
+  useEffect(() => { if (!identityLoading) void refresh(); }, [identityLoading, refresh]);
 
   const copy = async () => {
     try {
@@ -54,30 +51,16 @@ export default function DiagnosticsScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text accessibilityRole="header" style={styles.title}>Diagnostics</Text>
-      <Text style={styles.help}>This report is local and sanitized. It omits the full device ID, device name, pair secret, authentication proofs, QR bootstrap material, raw ICE addresses/candidates and raw exception text.</Text>
-
-      {loading || identityLoading ? <View accessibilityLiveRegion="polite" style={styles.loading}><ActivityIndicator accessibilityLabel="Building diagnostic report" /><Text>Building sanitized report…</Text></View> : null}
-      {error ? <Text accessibilityRole="alert" accessibilityLiveRegion="assertive" style={styles.error}>{error}</Text> : null}
-
+      <Text style={styles.title}>Diagnostics</Text>
+      <Text style={styles.help}>Sanitized local diagnostics only. No pair secret, QR material, SDP, ICE address, raw candidate, SSID, BSSID or full device ID is included.</Text>
+      {loading || identityLoading ? <View style={styles.loading}><ActivityIndicator /><Text>Building report…</Text></View> : null}
+      {error ? <Text style={styles.error}>{error}</Text> : null}
       {!loading && !identityLoading && !error ? (
         <>
-          <View accessibilityLabel="Sanitized diagnostic report" style={styles.reportBox}>
-            <Text style={styles.report}>{report}</Text>
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Copy diagnostic report"
-            accessibilityHint="Copies the local sanitized report to the clipboard."
-            onPress={() => { void copy(); }}
-            style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-          >
-            <Text style={styles.primaryButtonText}>Copy Diagnostic Report</Text>
-          </Pressable>
-          {copied ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite">Copied.</Text> : null}
-          <Pressable accessibilityRole="button" accessibilityLabel="Refresh diagnostic report" accessibilityHint="Rebuilds the local sanitized report." onPress={() => { void refresh(); }} style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
-            <Text style={styles.secondaryButtonText}>Refresh report</Text>
-          </Pressable>
+          <View style={styles.reportBox}><Text selectable style={styles.report}>{report}</Text></View>
+          <Pressable onPress={() => void copy()} style={styles.primaryButton}><Text style={styles.primaryButtonText}>Copy report</Text></Pressable>
+          {copied ? <Text>Copied.</Text> : null}
+          <Pressable onPress={() => void refresh()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Refresh</Text></Pressable>
         </>
       ) : null}
     </ScrollView>
@@ -91,10 +74,9 @@ const styles = StyleSheet.create({
   loading: { gap: 8, alignItems: 'center' },
   reportBox: { borderWidth: 1, borderColor: '#777', borderRadius: 12, padding: 14 },
   report: { fontFamily: 'monospace', fontSize: 13, lineHeight: 19 },
-  primaryButton: { minHeight: 48, justifyContent: 'center', alignItems: 'center', backgroundColor: '#111', borderRadius: 10, paddingHorizontal: 13 },
+  primaryButton: { minHeight: 48, justifyContent: 'center', alignItems: 'center', backgroundColor: '#111', borderRadius: 10 },
   primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  secondaryButton: { minHeight: 48, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#555', borderRadius: 10, paddingHorizontal: 13 },
+  secondaryButton: { minHeight: 48, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#555', borderRadius: 10 },
   secondaryButtonText: { fontSize: 16, fontWeight: '700' },
-  pressed: { opacity: 0.7 },
   error: { fontWeight: '700' },
 });
