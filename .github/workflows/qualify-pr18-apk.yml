@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - qualification/pr18-apk-f9b3738
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
