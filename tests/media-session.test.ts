@@ -150,7 +150,7 @@ test('sharer is the only restart offer authority and returns to publishing when 
 });
 
 test('requester cannot turn a restart request into competing offer authority', async () => {
-  const h = harness(); await settle(); h.session.emit(msg('MEDIA_RESTART_REQUEST', { reason: 'connection_lost' })); await settle(); assert.equal(h.session.failed, 0); assert.equal(h.media.getSnapshot().type, 'error'); assert.equal(h.native.offers, 0); h.media.dispose();
+  const h = harness(); await settle(); h.session.emit(msg('MEDIA_RESTART_REQUEST', { reason: 'connection_lost' })); await settle(); assert.equal(h.session.failed, 1); assert.deepEqual(h.session.failedSessionIds, [sessionId]); assert.equal(h.media.getSnapshot().type, 'error'); assert.equal(h.native.offers, 0); h.media.dispose();
 });
 
 test('planned native close during reconnect does not become a phantom failure', async () => {
@@ -163,7 +163,7 @@ test('recovery is capped and fails closed after the configured attempts', async 
     if (h.scheduler.pending()) { h.scheduler.runNext(); await settle(); }
     if (attempt < MEDIA_RECONNECT_MAX_ATTEMPTS - 1) { h.native.emit({ type: 'connection_state', sessionId, state: 'failed' }); await settle(); }
   }
-  h.native.emit({ type: 'connection_state', sessionId, state: 'failed' }); await settle(); assert.equal(h.media.getSnapshot().type, 'error'); assert.equal(h.session.failed, 0); h.media.dispose();
+  h.native.emit({ type: 'connection_state', sessionId, state: 'failed' }); await settle(); assert.equal(h.media.getSnapshot().type, 'error'); assert.equal(h.session.failed, 1); assert.deepEqual(h.session.failedSessionIds, [sessionId]); h.media.dispose();
 });
 
 test('session teardown cancels recovery and closes media idempotently', async () => {
