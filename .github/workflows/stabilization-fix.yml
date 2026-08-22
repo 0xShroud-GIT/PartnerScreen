@@ -23,13 +23,14 @@ jobs:
           cache: npm
       - run: npm install --global npm@10.9.8
       - run: npm ci --no-audit --no-fund
-      - run: node scripts/apply-stabilization-batch-v3.mjs
+      - run: node scripts/apply-stabilization-batch-v4.mjs
       - run: npm run ci
       - name: Commit verified stabilization patch
         run: |
           rm scripts/apply-stabilization-batch.mjs
           rm scripts/apply-stabilization-batch-v2.mjs
           rm scripts/apply-stabilization-batch-v3.mjs
+          rm scripts/apply-stabilization-batch-v4.mjs
           rm .github/workflows/stabilization-fix.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
