@@ -45,6 +45,9 @@ export type DiagnosticEventKind =
   | 'media_negotiation_started'
   | 'media_remote_track'
   | 'media_first_frame'
+  // Persisted schema-v1 compatibility only. Current MediaSession never emits these retired events.
+  | 'media_keyframe_requested'
+  | 'media_keyframe_forced'
   | 'media_bitrate_parameters_failed'
   | 'media_degraded'
   | 'media_reconnect_attempt'
@@ -73,7 +76,7 @@ const VALID_KINDS = new Set<DiagnosticEventKind>([
   'control_auth_failed', 'control_transport_failed', 'capture_consent_requested',
   'capture_consent_denied', 'capture_started', 'capture_stopped', 'capture_revoked',
   'capture_failed', 'media_negotiation_started', 'media_remote_track', 'media_first_frame',
-  'media_bitrate_parameters_failed', 'media_degraded', 'media_reconnect_attempt',
+  'media_keyframe_requested', 'media_keyframe_forced', 'media_bitrate_parameters_failed', 'media_degraded', 'media_reconnect_attempt',
   'media_reconnected', 'media_failed', 'media_stats', 'notification_shown', 'notification_cleared',
 ]);
 
