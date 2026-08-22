@@ -15,11 +15,12 @@ internal object IncomingRequestIntentCodec {
 
   fun buildLaunchIntent(context: Context, sessionId: String): Intent {
     require(SESSION_ID_RE.matches(sessionId)) { "Incoming request session ID is invalid." }
-    return Intent(Intent.ACTION_VIEW, uri(sessionId.lowercase())).apply {
+    val normalized = sessionId.lowercase()
+    return Intent(Intent.ACTION_VIEW, uri(normalized)).apply {
       flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
       setPackage(context.packageName)
       putExtra(EXTRA_KIND, KIND_INCOMING_REQUEST)
-      putExtra(EXTRA_SESSION_ID, sessionId.lowercase())
+      putExtra(EXTRA_SESSION_ID, normalized)
     }
   }
 

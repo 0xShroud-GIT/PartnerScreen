@@ -67,6 +67,7 @@ class PartnerRemoteVideoView(context: Context, appContext: AppContext) : ExpoVie
           "height" to videoHeight,
           "rotation" to rotation,
         ))
+        WebRtcEngine.getInstance().noteRendererGeometry(sessionId, videoWidth, videoHeight, rotation)
         renderer.requestLayout()
         invalidate()
       }

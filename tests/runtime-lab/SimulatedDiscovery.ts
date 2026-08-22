@@ -18,8 +18,24 @@ export class SimulatedDiscoveryFabric {
   private nextService = 1;
   private readonly probes = new Map<string, SimulatedDiscovery>();
   private readonly services = new Map<string, ActiveService>();
+  controlFabric?: { hasEndpoint(host: string, port: number): boolean };
 
   constructor(readonly network: VirtualNetwork) {}
+
+  removeServicesForHost(host: string): void {
+    const toRemove: string[] = [];
+    for (const [name, active] of this.services.entries()) {
+      if (active.service.host === host) toRemove.push(name);
+    }
+    for (const name of toRemove) {
+      const active = this.services.get(name);
+      if (!active) continue;
+      this.services.delete(name);
+      for (const other of this.services.values()) {
+        this.network.transmit('discovery', 32, () => other.owner.emit({ type: 'service_lost', serviceName: name }));
+      }
+    }
+  }
 
   allocateProbe(owner: SimulatedDiscovery): number {
     const port = this.nextPort++;
@@ -103,7 +119,14 @@ export class SimulatedDiscovery implements PartnerDiscovery {
   }
 
   async probe(host: string, port: number): Promise<void> {
-    if (!this.fabric.hasProbe(host, port)) throw new Error('Simulated discovery probe endpoint is stale.');
+    // P0-A: PairedAvailable requires proof of the exact CONTROL endpoint, not the NSD probe socket.
+    // The discovery probe port (42000+) is distinct from the control port (44000+). After the fix,
+    // AvailabilityService probes host:controlPort, which must be checked against the control fabric
+    // rather than the discovery probe registry. Accept either a discovery probe or a live control
+    // endpoint as reachable; otherwise the endpoint is stale and availability must stay offline.
+    const isDiscoveryProbe = this.fabric.hasProbe(host, port);
+    const isControlEndpoint = this.fabric.controlFabric?.hasEndpoint(host, port) ?? false;
+    if (!isDiscoveryProbe && !isControlEndpoint) throw new Error('Simulated discovery probe endpoint is stale.');
     await new Promise<void>((resolve, reject) => {
       const sent = this.fabric.network.transmit('discovery', 8, resolve);
       if (!sent) reject(new Error('Simulated discovery probe is unreachable.'));

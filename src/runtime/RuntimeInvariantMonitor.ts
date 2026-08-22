@@ -29,16 +29,17 @@ export class RuntimeInvariantMonitor {
 
   claim(kind: Exclude<RuntimeOwnerKind, 'session'>, sessionId: string, maxOwners = 1): () => void {
     const map = this.owners[kind];
-    const next = (map.get(sessionId) ?? 0) + 1;
-    map.set(sessionId, next);
+    const current = map.get(sessionId) ?? 0;
+    const next = current + 1;
     this.require(next <= maxOwners, `${kind} has ${next} owners for session ${sessionId}; max ${maxOwners}.`);
+    map.set(sessionId, next);
     let released = false;
     return () => {
       if (released) return;
       released = true;
-      const current = map.get(sessionId) ?? 0;
-      if (current <= 1) map.delete(sessionId);
-      else map.set(sessionId, current - 1);
+      const count = map.get(sessionId) ?? 0;
+      if (count <= 1) map.delete(sessionId);
+      else map.set(sessionId, count - 1);
     };
   }
 

@@ -1,10 +1,9 @@
 import type { DiagnosticEventKind } from '../domain/diagnostics/DiagnosticEvent';
-import { isBasePairedState, type SessionState } from '../session/SessionState';
+import type { SessionState } from '../session/SessionState';
 
 export interface NotificationPort {
   showRequestNotification(sessionId: string, partnerName: string): Promise<boolean>;
   clearRequestNotification(): Promise<boolean>;
-  ensurePermission(): Promise<boolean>;
 }
 
 export interface NotifierDiagnostics {
@@ -19,7 +18,6 @@ export interface SessionSource {
 export class IncomingRequestNotifier {
   private activeSessionId: string | null = null;
   private desiredGeneration = 0;
-  private permissionAsked = false;
   private operationQueue: Promise<void> = Promise.resolve();
   private readonly unsubscribe: () => void;
 
@@ -62,18 +60,10 @@ export class IncomingRequestNotifier {
     if (!this.isCurrent(generation)) return;
     const state = this.session.getSnapshot();
 
-    if ((isBasePairedState(state) || state.type === 'IncomingRequest') && !this.permissionAsked) {
-      this.permissionAsked = true;
-      await this.notifications.ensurePermission().catch(() => false);
-      if (!this.isCurrent(generation)) return;
-    }
-
     if (state.type === 'IncomingRequest') {
       if (this.activeSessionId === state.sessionId) return;
       const sessionId = state.sessionId;
       const partnerName = state.pair.partnerDeviceName;
-      await this.notifications.ensurePermission().catch(() => false);
-      if (!this.isCurrent(generation)) return;
       const shown = await this.notifications.showRequestNotification(sessionId, partnerName).catch(() => false);
       if (!this.isCurrent(generation)) {
         // Stale completed show cannot remain on the device while a newer generation is queued.

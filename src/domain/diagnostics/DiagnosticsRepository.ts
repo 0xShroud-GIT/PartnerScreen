@@ -17,8 +17,13 @@ export class DiagnosticsPersistenceError extends Error {
   }
 }
 
+const HIGH_FREQUENCY_KINDS = new Set<DiagnosticEventKind>(['media_stats']);
+
 export class DiagnosticsRepository {
   private writeQueue: Promise<void> = Promise.resolve();
+  private memory: DiagnosticEvent[] = [];
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private loaded = false;
 
   constructor(
     private readonly store: KeyValueStore,
@@ -26,42 +31,62 @@ export class DiagnosticsRepository {
   ) {}
 
   async list(): Promise<DiagnosticEvent[]> {
+    await this.ensureLoaded();
+    return this.memory.slice(-MAX_DIAGNOSTIC_EVENTS);
+  }
+
+  async append(kind: DiagnosticEventKind): Promise<void> {
+    await this.ensureLoaded();
+    const next: DiagnosticEvent = {
+      schemaVersion: DIAGNOSTIC_SCHEMA_VERSION,
+      at: this.clock.nowIso(),
+      kind,
+    };
+    if (HIGH_FREQUENCY_KINDS.has(kind)) {
+      const withoutStats = this.memory.filter((event) => event.kind !== 'media_stats');
+      this.memory = [...withoutStats, next].slice(-MAX_DIAGNOSTIC_EVENTS);
+    } else {
+      this.memory = [...this.memory, next].slice(-MAX_DIAGNOSTIC_EVENTS);
+    }
+    this.schedulePersist();
+  }
+
+  private async ensureLoaded(): Promise<void> {
+    if (this.loaded) return;
     let raw: string | null;
     try {
       raw = await this.store.getString(DIAGNOSTICS_STORAGE_KEY);
-    } catch (error) {
-      throw new DiagnosticsPersistenceError('Could not read local diagnostics.', { cause: error });
+    } catch {
+      this.memory = [];
+      this.loaded = true;
+      return;
     }
-    if (raw === null) return [];
-
+    if (raw === null) { this.memory = []; this.loaded = true; return; }
     try {
       const parsed = JSON.parse(raw) as unknown;
       if (!Array.isArray(parsed) || !parsed.every(isDiagnosticEvent)) {
-        throw new Error('Unexpected diagnostics shape.');
+        throw new DiagnosticsPersistenceError('Persisted diagnostics are corrupt.');
       }
-      return parsed.slice(-MAX_DIAGNOSTIC_EVENTS);
+      this.memory = parsed.slice(-MAX_DIAGNOSTIC_EVENTS);
+      this.loaded = true;
     } catch (error) {
+      if (error instanceof DiagnosticsPersistenceError) throw error;
       throw new DiagnosticsPersistenceError('Persisted diagnostics are corrupt.', { cause: error });
     }
   }
 
-  async append(kind: DiagnosticEventKind): Promise<void> {
-    const operation = this.writeQueue.then(async () => {
-      const existing = await this.list();
-      const next: DiagnosticEvent = {
-        schemaVersion: DIAGNOSTIC_SCHEMA_VERSION,
-        at: this.clock.nowIso(),
-        kind,
-      };
-      const bounded = [...existing, next].slice(-MAX_DIAGNOSTIC_EVENTS);
-      try {
-        await this.store.setString(DIAGNOSTICS_STORAGE_KEY, JSON.stringify(bounded));
-      } catch (error) {
-        throw new DiagnosticsPersistenceError('Could not persist local diagnostics.', { cause: error });
-      }
-    });
-
-    this.writeQueue = operation.catch(() => undefined);
-    return operation;
+  private schedulePersist(): void {
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      const snapshot = this.memory.slice(-MAX_DIAGNOSTIC_EVENTS);
+      this.writeQueue = this.writeQueue.then(async () => {
+        try {
+          await this.store.setString(DIAGNOSTICS_STORAGE_KEY, JSON.stringify(snapshot));
+        } catch {
+          /* persistence never owns product flow */
+        }
+      }).catch(() => undefined);
+    }, 750);
   }
 }

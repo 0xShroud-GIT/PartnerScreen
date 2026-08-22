@@ -292,6 +292,12 @@ export class SimulatedDevice {
     });
   }
 
+  assertNotificationInvariantNow(): void {
+    const session = this.sessionController.getSnapshot();
+    const incoming = session.type === 'IncomingRequest' ? session.sessionId : null;
+    this.invariants.assertNotification(incoming, this.notificationPort.shownSessionId);
+  }
+
   private refreshInvariants(): void {
     const session = this.sessionController.getSnapshot();
     const sessionId = session.type === 'Connected' ? session.sessionId : null;
@@ -329,8 +335,23 @@ export class SimulatedDevice {
       this.invariants.assertLive(this.firstFrameKeys.has(`${media.sessionId}:${media.trackEpoch}`), media.sessionId);
     }
 
+    // Notification clearing is async (IncomingRequestNotifier uses an operation queue).
+    // When a session leaves IncomingRequest, the native notification clear is enqueued
+    // and completes on the next microtask. Failing synchronously on every setState would
+    // flag a transient as a violation before the clear has run. Instead, assert immediately
+    // only while an IncomingRequest is active (where a wrong non-null notification is always
+    // a bug), and defer the "stale notification after leaving IncomingRequest" check until
+    // the twin has drained microtasks (see PartnerScreenTwin.flush/flushUntil).
     const incoming = session.type === 'IncomingRequest' ? session.sessionId : null;
-    this.invariants.assertNotification(incoming, this.notificationPort.shownSessionId);
+    const shown = this.notificationPort.shownSessionId;
+    if (incoming !== null) {
+      this.invariants.assertNotification(incoming, shown);
+    } else if (shown === null) {
+      // No notification expected and none shown — trivially consistent.
+      this.invariants.assertNotification(incoming, shown);
+    }
+    // Defer stale-notification check (incoming === null && shown !== null) to flush-time
+    // validation after the notifier's async clear has had a chance to run.
   }
 
   private releaseAllClaims(): void {
@@ -362,6 +383,11 @@ export class PartnerScreenTwin {
     this.controlFabric = new SimulatedControlFabric(this.network);
     this.discoveryFabric = new SimulatedDiscoveryFabric(this.network);
     this.mediaFabric = new SimulatedMediaFabric(this.network);
+    // P0-A: discovery probe must validate the exact control endpoint; link fabrics so
+    // SimulatedDiscovery.probe can check control liveness and so stale control endpoints
+    // invalidate their discovery advertisements.
+    this.discoveryFabric.controlFabric = this.controlFabric;
+    this.controlFabric.discoveryFabric = this.discoveryFabric;
     this.alice = new SimulatedDevice({
       name: 'Alice',
       deviceId: '11111111-1111-4111-8111-111111111111',
@@ -424,6 +450,11 @@ export class PartnerScreenTwin {
     await this.flush();
   }
 
+  private assertAllNotificationInvariants(): void {
+    this.alice.assertNotificationInvariantNow();
+    this.bob.assertNotificationInvariantNow();
+  }
+
   /** Drain only work due at the current logical time. Future timers never auto-fire. */
   async flush(maxCycles = 2_000): Promise<void> {
     let idleRounds = 0;
@@ -441,7 +472,11 @@ export class PartnerScreenTwin {
       const after = this.clock.nextDueMs();
       if (after === null || after > this.clock.nowMs()) {
         idleRounds += 1;
-        if (idleRounds >= 3) return;
+        if (idleRounds >= 3) {
+          await settleMicrotasks();
+          this.assertAllNotificationInvariants();
+          return;
+        }
       } else {
         idleRounds = 0;
       }
@@ -453,9 +488,17 @@ export class PartnerScreenTwin {
   async flushUntil(predicate: () => boolean, maxCycles = 4_000): Promise<void> {
     let stagnantRounds = 0;
     for (let cycle = 0; cycle < maxCycles; cycle += 1) {
-      if (predicate()) return;
+      if (predicate()) {
+        await settleMicrotasks();
+        this.assertAllNotificationInvariants();
+        return;
+      }
       await settleMicrotasks();
-      if (predicate()) return;
+      if (predicate()) {
+        await settleMicrotasks();
+        this.assertAllNotificationInvariants();
+        return;
+      }
 
       const next = this.clock.nextDueMs();
       if (next !== null) {
@@ -466,7 +509,11 @@ export class PartnerScreenTwin {
 
       await Promise.all([this.alice.waitForPairLifecycle(), this.bob.waitForPairLifecycle()]);
       await settleMicrotasks();
-      if (predicate()) return;
+      if (predicate()) {
+        await settleMicrotasks();
+        this.assertAllNotificationInvariants();
+        return;
+      }
       if (this.clock.nextDueMs() === null) {
         stagnantRounds += 1;
         if (stagnantRounds >= 8) break;

@@ -107,9 +107,6 @@ class WebRtcLoopbackTest {
     answererObserver: LoopObserver,
     iceRestart: Boolean,
   ) {
-    // Candidate callbacks can race SDP callbacks. Queue both directions at the
-    // beginning of every negotiation/restart and release each direction only after
-    // the destination PeerConnection has the matching remote description.
     offererObserver.disableRemoteCandidates()
     answererObserver.disableRemoteCandidates()
 

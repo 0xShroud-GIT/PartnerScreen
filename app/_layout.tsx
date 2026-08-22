@@ -3,12 +3,13 @@ import { AppState } from 'react-native';
 import * as Linking from 'expo-linking';
 import { Stack, router } from 'expo-router';
 import { appServices } from '../src/application/AppServices';
-import { parseIncomingRequestSessionId, shouldOpenIncomingRequest } from '../src/request/incomingRequestRoute';
+import { IncomingRequestIngress } from '../src/request/incomingRequestRoute';
+import { parseIncomingRequestSessionId } from '../src/request/incomingRequestRoute';
+
+const incomingIngress = new IncomingRequestIngress();
 
 function routeIncomingRequest(sessionId: string | null | undefined): void {
-  if (shouldOpenIncomingRequest(appServices.sessionController.getSnapshot(), sessionId)) {
-    router.replace('/');
-  }
+  incomingIngress.route(sessionId, appServices.sessionController.getSnapshot(), () => { router.replace('/'); });
 }
 
 function routeIncomingRequestUrl(url: string | null | undefined): void {
@@ -23,6 +24,7 @@ export default function RootLayout() {
       if (state === 'active') void appServices.diagnosticsRepository.append('app_foregrounded').catch(() => undefined);
       if (state === 'background') void appServices.diagnosticsRepository.append('app_backgrounded').catch(() => undefined);
     });
+    // All cold/warm ingress mechanisms converge into the same deduping authority.
     void Linking.getInitialURL().then(routeIncomingRequestUrl).catch(() => undefined);
     const linkingSub = Linking.addEventListener('url', (event) => {
       routeIncomingRequestUrl(event.url);

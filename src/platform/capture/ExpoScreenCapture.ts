@@ -2,7 +2,6 @@ import { PermissionsAndroid, Platform } from 'react-native';
 import PartnerScreenCaptureModule from '../../../modules/partner-screen-capture';
 import type { PartnerScreenCaptureEvent } from '../../../modules/partner-screen-capture';
 import type { ScreenCaptureNativeEvent, ScreenCapturePort } from '../../capture/ScreenCapturePort';
-import { RUNTIME_LAB_SYNTHETIC_CAPTURE } from '../../runtime/RuntimeLabFlags';
 
 const SAFE_NATIVE_STATES = new Set(['idle', 'starting', 'capturing']);
 const SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -47,10 +46,6 @@ export class ExpoScreenCapture implements ScreenCapturePort {
   subscribe(listener: (event: ScreenCaptureNativeEvent) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 
   async ensureNotificationPermission(): Promise<boolean> {
-    // The synthetic emulator lane isolates WebRTC/renderer behavior from Android
-    // notification + MediaProjection permission UX. Native code independently rejects
-    // synthetic capture in non-debuggable applications.
-    if (RUNTIME_LAB_SYNTHETIC_CAPTURE) return true;
     if (Platform.OS !== 'android') return false;
     const apiLevel = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
     if (!Number.isFinite(apiLevel) || apiLevel < 33) return true;
@@ -60,34 +55,19 @@ export class ExpoScreenCapture implements ScreenCapturePort {
   }
 
   async requestConsent(): Promise<boolean> {
-    if (RUNTIME_LAB_SYNTHETIC_CAPTURE) return true;
     try { return await PartnerScreenCaptureModule.requestConsent(); }
     catch { return false; }
   }
-
   async start(sessionId: string): Promise<void> {
     if (!validSession(sessionId)) throw new Error('PartnerScreen could not start screen capture.');
-    try {
-      const started = RUNTIME_LAB_SYNTHETIC_CAPTURE
-        ? await PartnerScreenCaptureModule.startSyntheticCaptureForTest(sessionId)
-        : await PartnerScreenCaptureModule.startCapture(sessionId);
-      if (started === false) throw new Error('capture start rejected');
-    } catch {
-      throw new Error('PartnerScreen could not start screen capture.');
-    }
+    try { await PartnerScreenCaptureModule.startCapture(sessionId); } catch { throw new Error('PartnerScreen could not start screen capture.'); }
   }
-
   async stop(): Promise<void> {
     try {
       const stopped = await PartnerScreenCaptureModule.stopCapture();
       if (stopped === false) throw new Error('PartnerScreen could not stop screen capture cleanly.');
     } catch { throw new Error('PartnerScreen could not stop screen capture cleanly.'); }
   }
-
-  getNativeState(): 'idle' | 'starting' | 'capturing' {
-    const value = PartnerScreenCaptureModule.getState();
-    return SAFE_NATIVE_STATES.has(value) ? value as 'idle' | 'starting' | 'capturing' : 'idle';
-  }
-
+  getNativeState(): 'idle' | 'starting' | 'capturing' { const value = PartnerScreenCaptureModule.getState(); return SAFE_NATIVE_STATES.has(value) ? value as 'idle' | 'starting' | 'capturing' : 'idle'; }
   dispose(): void { this.nativeSubscription.remove(); this.listeners.clear(); }
 }

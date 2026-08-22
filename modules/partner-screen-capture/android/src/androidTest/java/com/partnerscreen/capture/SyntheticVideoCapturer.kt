@@ -73,7 +73,6 @@ internal class SyntheticVideoCapturer : VideoCapturer {
     try {
       observer?.onFrameCaptured(frame)
     } finally {
-      // VideoFrame owns the initial JavaI420Buffer reference.
       frame.release()
     }
   }

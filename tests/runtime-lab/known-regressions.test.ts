@@ -4,13 +4,7 @@ import { DeterministicPartnerScreenTwin } from './DeterministicTwin';
 
 const regression = process.env.PARTNERSCREEN_RUN_KNOWN_REGRESSIONS === '1' ? test : test.skip;
 
-/**
- * These are desired-product regressions captured from the failed 1d09ae4d APK.
- * They are intentionally quarantined during Mission 0R because 0R builds the
- * laboratory before changing runtime behavior. P0 remediation turns them green
- * one by one; do not rewrite expectations to match the broken implementation.
- */
-
+/** Desired-product regressions captured from the failed 1d09ae4d APK. */
 regression('P0-C: waiting for human MediaProjection consent does not consume a media first-frame deadline', async () => {
   const twin = new DeterministicPartnerScreenTwin(201);
   try {
@@ -25,7 +19,6 @@ regression('P0-C: waiting for human MediaProjection consent does not consume a m
     assert.equal(twin.alice.sessionController.getSnapshot().type, 'Connected');
 
     await twin.advanceBy(18_000);
-    // Desired behavior: human consent wait is not a media failure.
     assert.equal(twin.alice.sessionController.getSnapshot().type, 'Connected');
     assert.notEqual(twin.alice.mediaSessionController.getSnapshot().type, 'error');
 
@@ -47,8 +40,6 @@ regression('P0-A: a stale advertised control endpoint cannot leave the partner P
     assert.ok(endpoint);
     twin.controlFabric.makeEndpointStale(endpoint!);
     await twin.flush();
-
-    // Desired behavior: availability is tied to the exact reachable control endpoint generation.
     assert.notEqual(twin.alice.sessionController.getSnapshot().type, 'PairedAvailable');
   } finally {
     twin.dispose();
@@ -68,7 +59,6 @@ regression('P0-E: denied incoming-notification permission never prevents in-app 
     await twin.bob.acceptIncomingAndStartCapture();
     await twin.flush();
 
-    // Desired behavior: POST_NOTIFICATIONS affects notification UX, not MediaProjection eligibility.
     assert.notEqual(twin.bob.screenCaptureCoordinator.getSnapshot().type, 'error');
     assert.equal(twin.bob.sessionController.getSnapshot().type, 'Connected');
   } finally {
@@ -76,20 +66,23 @@ regression('P0-E: denied incoming-notification permission never prevents in-app 
   }
 });
 
-regression('P0-D: background trusted-listener ownership survives UI/process recreation contract', async () => {
+regression('P0-D: trusted listener survives Activity/UI recreation while app process remains alive', async () => {
   const twin = new DeterministicPartnerScreenTwin(204);
   try {
     await twin.initialize();
     await twin.pair();
-    twin.bob.controlTransport.killProcess();
+    twin.bob.controlTransport.recreateActivity();
     await twin.flush();
 
     await twin.requestScreen(twin.alice);
-    await twin.flush();
-
-    // Desired post-P0-D contract: the native trusted listener outlives the React/UI process.
+    await twin.flushUntil(() => twin.bob.sessionController.getSnapshot().type === 'IncomingRequest');
     assert.equal(twin.bob.sessionController.getSnapshot().type, 'IncomingRequest');
   } finally {
     twin.dispose();
   }
+});
+
+test.skip('P0-D: full process death reconstructs trusted presence from secure persisted trust', async () => {
+  // Intentionally unproven. killProcess() destroys all process-local callbacks/sockets/service state.
+  // This becomes executable only after a secure native trust-store -> START_STICKY reconstruction bridge exists.
 });

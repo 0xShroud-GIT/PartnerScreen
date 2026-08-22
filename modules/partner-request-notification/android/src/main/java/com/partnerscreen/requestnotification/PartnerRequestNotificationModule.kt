@@ -24,7 +24,7 @@ class PartnerRequestNotificationModule : Module() {
 
     AsyncFunction("showRequestNotification") { sessionId: String, partnerName: String ->
       val context = appContext.reactContext ?: return@AsyncFunction false
-      if (!NotificationPermissionPolicy.isGranted(context)) {
+      if (!NotificationPermissionPolicy.isAvailable(context, CHANNEL_ID)) {
         return@AsyncFunction false
       }
       createChannel(context)
@@ -68,7 +68,12 @@ class PartnerRequestNotificationModule : Module() {
 
     Function("hasNotificationPermission") {
       val context = appContext.reactContext ?: return@Function false
-      NotificationPermissionPolicy.isGranted(context)
+      NotificationPermissionPolicy.isAvailable(context, CHANNEL_ID)
+    }
+
+    Function("notificationCapability") {
+      val context = appContext.reactContext ?: return@Function "app_disabled"
+      NotificationPermissionPolicy.capability(context, CHANNEL_ID).wireValue
     }
 
     AsyncFunction("consumeLaunchSessionId") {
@@ -90,7 +95,7 @@ class PartnerRequestNotificationModule : Module() {
 
   private fun createChannel(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    val manager = context.getSystemService(NotificationManager::class.java)
+    val manager = context.getSystemService(NotificationManager::class.java) ?: return
     val existing = manager.getNotificationChannel(CHANNEL_ID)
     if (existing != null) return
     val channel = NotificationChannel(CHANNEL_ID, "Incoming screen requests", NotificationManager.IMPORTANCE_HIGH).apply {

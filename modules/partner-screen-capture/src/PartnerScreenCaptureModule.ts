@@ -4,8 +4,6 @@ import type { PartnerScreenCaptureModuleEvents } from './PartnerScreenCapture.ty
 declare class PartnerScreenCaptureModule extends NativeModule<PartnerScreenCaptureModuleEvents> {
   requestConsent(): Promise<boolean>;
   startCapture(sessionId: string): Promise<boolean>;
-  /** Runtime Laboratory only. Native Android also requires a debuggable application. */
-  startSyntheticCaptureForTest(sessionId: string): Promise<boolean>;
   stopCapture(): Promise<boolean>;
   getState(): string;
   prepareRequesterMedia(sessionId: string): Promise<boolean>;
@@ -14,6 +12,7 @@ declare class PartnerScreenCaptureModule extends NativeModule<PartnerScreenCaptu
   acceptAnswer(sessionId: string, sdp: string): Promise<boolean>;
   addIceCandidate(sessionId: string, sdpMid: string, sdpMLineIndex: number, candidate: string): Promise<boolean>;
   closeMedia(sessionId: string): Promise<boolean>;
+  restartIce(sessionId: string): Promise<boolean>;
   getMediaStats(sessionId: string): Promise<Record<string, unknown> | null>;
 }
 

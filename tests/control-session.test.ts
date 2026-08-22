@@ -36,7 +36,11 @@ class FakeTransport implements ControlTransport {
   host: string;
   startCount = 0;
   stopCount = 0;
+  presenceStarts = 0;
+  presenceStops = 0;
   constructor(host: string, private readonly network: FakeNetwork) { this.host = host; }
+  async startTrustedPresence(): Promise<void> { this.presenceStarts += 1; }
+  async stopTrustedPresence(): Promise<void> { this.presenceStops += 1; }
   async startListener(): Promise<ControlListenerEndpoint> { this.startCount += 1; const endpoint = this.network.allocate(this); this.endpoint = endpoint; return endpoint; }
   async stopListener(listenerId: string): Promise<void> { this.stopCount += 1; if (this.endpoint?.listenerId === listenerId) { this.network.release(this.endpoint); this.endpoint = null; } }
   async connect(host: string, port: number): Promise<string> { return this.network.connect(this, host, port); }
@@ -48,6 +52,22 @@ class FakeTransport implements ControlTransport {
 function cipher(): AuthenticatedSignalingCipher { return new AuthenticatedSignalingCipher(new NodeAes(), new NodeHmac()); }
 async function settle(): Promise<void> { for (let i = 0; i < 6; i += 1) await new Promise<void>((resolve) => setImmediate(resolve)); }
 const deviceA = '11111111-1111-4111-8111-111111111111', deviceB = '22222222-2222-4222-8222-222222222222', pairId = '33333333-3333-4333-8333-333333333333', secret = 'ab'.repeat(32);
+
+test('pair activation starts trusted presence; JS recreation can reattach the same native listener', async () => {
+  const network = new FakeNetwork(), transport = new FakeTransport('192.168.8.10', network);
+  const session = new ControlSession(transport, cipher());
+  await session.activate({ pairId, localDeviceId: deviceA, partnerDeviceId: deviceB, pairSecretHex: secret });
+  const first = await session.ensureListening();
+  assert.equal(transport.presenceStarts, 1);
+  assert.ok(transport.startCount >= 1);
+  const starts = transport.startCount;
+  const again = await session.ensureListening();
+  assert.equal(again.port, first.port);
+  assert.equal(transport.startCount, starts);
+  await session.deactivate();
+  assert.ok(transport.presenceStops >= 1);
+  session.dispose();
+});
 
 test('two control sessions mutually authenticate before routing sealed messages', async () => {
   const network = new FakeNetwork(), transportA = new FakeTransport('192.168.1.10', network), transportB = new FakeTransport('192.168.1.11', network);
@@ -141,6 +161,25 @@ test('an authenticated active ControlSession survives loss/replacement of the li
   assert.ok(bEvents.some((event) => event.type === 'message' && event.message.type === 'REQUEST_SCREEN'));
   const replacement = await b.ensureListening();
   assert.notEqual(transportB.endpoint?.listenerId, bListenerId); // replacement listener established
+  await a.close(); await settle();
+});
+
+test('a listener UUID stuffed into connectionId cannot invalidate the owned listener or an authenticated session', async () => {
+  const network = new FakeNetwork(), transportA = new FakeTransport('192.168.7.10', network), transportB = new FakeTransport('192.168.7.11', network);
+  const a = new ControlSession(transportA, cipher()), b = new ControlSession(transportB, cipher());
+  await a.activate({ pairId, localDeviceId: deviceA, partnerDeviceId: deviceB, pairSecretHex: secret });
+  await b.activate({ pairId, localDeviceId: deviceB, partnerDeviceId: deviceA, pairSecretHex: secret });
+  const bEvents: ControlSessionEvent[] = [];
+  b.subscribe((event) => bEvents.push(event));
+  await a.connect(await b.ensureListening()); await settle();
+  const owned = transportB.endpoint?.listenerId;
+  assert.ok(owned);
+  transportB.emit({ type: 'error', code: 'listener_failed', connectionId: owned }); await settle();
+  assert.equal(transportB.endpoint?.listenerId, owned); // connectionId is not listener ownership
+  assert.equal(bEvents.some((event) => event.type === 'error' || event.type === 'closed'), false);
+  assert.equal(transportB.links.size, 1);
+  await b.ensureListening();
+  assert.equal(transportB.endpoint?.listenerId, owned);
   await a.close(); await settle();
 });
 

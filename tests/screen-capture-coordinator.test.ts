@@ -44,10 +44,13 @@ class FakeDiagnostics { readonly events: DiagnosticEventKind[] = []; async appen
 async function settle(): Promise<void> { for (let index = 0; index < 4; index += 1) await new Promise<void>((resolve) => setImmediate(resolve)); }
 function harness() { const port = new FakePort(), session = new FakeSession(), diagnostics = new FakeDiagnostics(); return { port, session, diagnostics, coordinator: new ScreenCaptureCoordinator(port, session, diagnostics) }; }
 
-test('notification denial fails closed before Android capture consent', async () => {
-  const { port, session, diagnostics, coordinator } = harness(); port.notificationAllowed = false;
+test('POST_NOTIFICATIONS denial does not block MediaProjection consent or capture', async () => {
+  const { port, session, coordinator } = harness(); port.notificationAllowed = false;
   await coordinator.requestForConnectedSharer();
-  assert.deepEqual(session.denied, [{ sessionId, reason: 'notifications_denied' }]); assert.equal(port.starts, 0); assert.equal(coordinator.getSnapshot().type, 'error'); assert.ok(diagnostics.events.includes('capture_consent_denied')); coordinator.dispose();
+  assert.deepEqual(session.denied, []);
+  assert.equal(port.starts, 1);
+  assert.equal(coordinator.getSnapshot().type, 'starting');
+  coordinator.dispose();
 });
 
 test('system consent denial notifies the authenticated peer and never starts capture', async () => {

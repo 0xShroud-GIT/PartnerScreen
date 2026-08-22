@@ -27,23 +27,82 @@ import java.util.concurrent.TimeoutException
 private const val MAX_FRAME_BYTES = 48 * 1024
 private const val CONNECT_TIMEOUT_MS = 5_000
 private const val SEND_TIMEOUT_MS = 4_000
-private const val TRANSPORT_WORKERS = 4
+private const val INBOUND_CLASSIFY_TIMEOUT_MS = 1_500
+private const val ACCEPT_WORKERS = 1
+private const val IO_WORKERS = 4
 
 private data class WifiEndpoint(val network: Network, val address: Inet4Address)
 private data class ListenerHandle(val socket: ServerSocket, val host: String)
 private data class ConnectionHandle(val socket: Socket, val writeLock: Any = Any())
 
 class PartnerControlModule : Module() {
-  private val listeners = ConcurrentHashMap<String, ListenerHandle>()
-  private val connections = ConcurrentHashMap<String, ConnectionHandle>()
-  private val connectionLock = Any()
-  private val executor: ExecutorService = Executors.newFixedThreadPool(TRANSPORT_WORKERS)
+  companion object {
+    private val listeners = ConcurrentHashMap<String, ListenerHandle>()
+    private val connections = ConcurrentHashMap<String, ConnectionHandle>()
+    private val connectionLock = Any()
+    private val pendingEvents = ArrayDeque<Map<String, Any>>()
+    @Volatile var presenceRequired = false
+    @Volatile private var eventSink: ((Map<String, Any>) -> Unit)? = null
+    // Accepts must not share a pool with blocked reads/writes: a stuck TCP read must never
+    // starve listener accepts or control sends. Probe connect-and-close also classifies on IO.
+    private val acceptExecutor: ExecutorService = Executors.newFixedThreadPool(ACCEPT_WORKERS)
+    private val ioExecutor: ExecutorService = Executors.newFixedThreadPool(IO_WORKERS)
+
+    fun currentListener(): Map<String, Any>? {
+      val entry = listeners.entries.firstOrNull() ?: return null
+      return mapOf("listenerId" to entry.key, "host" to entry.value.host, "port" to entry.value.socket.localPort)
+    }
+
+    fun attachSink(sink: ((Map<String, Any>) -> Unit)?) {
+      eventSink = sink
+      if (sink == null) return
+      val replay: List<Map<String, Any>>
+      synchronized(pendingEvents) {
+        replay = pendingEvents.toList()
+        pendingEvents.clear()
+      }
+      for (event in replay) sink(event)
+    }
+
+    fun emitEvent(event: Map<String, Any>) {
+      val sink = eventSink
+      if (sink != null) {
+        sink(event)
+        return
+      }
+      synchronized(pendingEvents) {
+        if (pendingEvents.size >= 16) pendingEvents.removeFirst()
+        pendingEvents.addLast(event)
+      }
+    }
+  }
 
   override fun definition() = ModuleDefinition {
     Name("PartnerControl")
     Events("onPartnerControlEvent")
 
+    OnCreate {
+      attachSink { event -> sendEvent("onPartnerControlEvent", event) }
+    }
+
+    AsyncFunction("startTrustedPresence") {
+      presenceRequired = true
+      val context = appContext.reactContext?.applicationContext ?: throw IllegalStateException("Android context is unavailable.")
+      PartnerTrustedPresenceService.start(context)
+      true
+    }
+
+    AsyncFunction("stopTrustedPresence") {
+      presenceRequired = false
+      val context = appContext.reactContext?.applicationContext
+      if (context != null) PartnerTrustedPresenceService.stop(context)
+      true
+    }
+
+    Function("getActiveListener") { currentListener() }
+
     AsyncFunction("startListener") {
+      currentListener()?.let { return@AsyncFunction it }
       require(listeners.isEmpty()) { "A control listener is already active." }
       val wifi = activeWifiEndpoint() ?: throw IllegalStateException("Control requires an active private IPv4 Wi-Fi address.")
       val server = ServerSocket()
@@ -52,7 +111,7 @@ class PartnerControlModule : Module() {
       val id = UUID.randomUUID().toString()
       val host = wifi.address.hostAddress ?: throw IllegalStateException("Wi-Fi address is unavailable.")
       listeners[id] = ListenerHandle(server, host)
-      executor.execute { acceptLoop(id, server) }
+      acceptExecutor.execute { acceptLoop(id, server) }
       mapOf("listenerId" to id, "host" to host, "port" to server.localPort)
     }
 
@@ -83,7 +142,8 @@ class PartnerControlModule : Module() {
       val bytes = frame.toByteArray(StandardCharsets.UTF_8)
       require(bytes.isNotEmpty() && bytes.size <= MAX_FRAME_BYTES) { "Control frame size is invalid." }
       val handle = connections[connectionId] ?: throw IllegalStateException("Control connection is not active.")
-      val write = executor.submit {
+      // executor.submit is the bounded write path; IO pool is separate from accept.
+      val write = ioExecutor.submit {
         synchronized(handle.writeLock) {
           val output = DataOutputStream(handle.socket.getOutputStream())
           output.writeInt(bytes.size)
@@ -112,7 +172,10 @@ class PartnerControlModule : Module() {
 
     AsyncFunction("close") { connectionId: String -> closeConnection(connectionId, emit = true) }
 
-    OnDestroy { shutdownAll() }
+    OnDestroy {
+      attachSink(null)
+      if (!presenceRequired) shutdownAll()
+    }
   }
 
   private fun acceptLoop(listenerId: String, server: ServerSocket) {
@@ -121,21 +184,61 @@ class PartnerControlModule : Module() {
         val socket = server.accept()
         socket.tcpNoDelay = true
         socket.keepAlive = true
-        val accepted = synchronized(connectionLock) {
-          if (connections.isNotEmpty()) false
-          else { registerConnectionLocked(socket, "inbound", listenerId); true }
-        }
-        if (!accepted) {
-          try { socket.close() } catch (_: Exception) { /* best effort */ }
-          emitError("busy", null)
-        }
+        // Classify off the accept thread so a slow first-frame wait cannot block further accepts.
+        ioExecutor.execute { classifyInbound(listenerId, socket) }
       } catch (_: Exception) {
-        if (!server.isClosed && listeners.containsKey(listenerId)) emitError("listener_failed", listenerId)
+        // Listener-scoped failure: emit listenerId, never stuff the listener UUID into connectionId.
+        if (!server.isClosed && listeners.containsKey(listenerId)) emitListenerError("listener_failed", listenerId)
         break
       }
     }
     listeners.remove(listenerId)
     try { server.close() } catch (_: Exception) { /* best effort */ }
+  }
+
+  private fun classifyInbound(listenerId: String, socket: Socket) {
+    // Reachability probes connect to the exact control port and close without a handshake frame.
+    // Those must never occupy the authenticated connection slot or emit a fake inbound session.
+    val firstFrame: ByteArray? = try {
+      socket.soTimeout = INBOUND_CLASSIFY_TIMEOUT_MS
+      val input = DataInputStream(socket.getInputStream())
+      val length = input.readInt()
+      if (length <= 0 || length > MAX_FRAME_BYTES) null
+      else {
+        val bytes = ByteArray(length)
+        input.readFully(bytes)
+        bytes
+      }
+    } catch (_: Exception) {
+      null
+    }
+    try { socket.soTimeout = 0 } catch (_: Exception) { /* best effort */ }
+    if (firstFrame == null) {
+      try { socket.close() } catch (_: Exception) { /* probe or junk */ }
+      return
+    }
+    if (!listeners.containsKey(listenerId)) {
+      firstFrame.fill(0)
+      try { socket.close() } catch (_: Exception) { /* stale listener */ }
+      return
+    }
+    val connectionId = synchronized(connectionLock) {
+      if (connections.isNotEmpty()) null
+      else registerConnectionLocked(socket, "inbound", listenerId)
+    }
+    if (connectionId == null) {
+      firstFrame.fill(0)
+      try { socket.close() } catch (_: Exception) { /* best effort */ }
+      emitError("busy", null)
+      return
+    }
+    emitEvent(mapOf(
+      "type" to "message",
+      "connectionId" to connectionId,
+      "frame" to String(firstFrame, StandardCharsets.UTF_8),
+    ))
+    firstFrame.fill(0)
+    ioExecutor.execute { readLoop(connectionId, socket) }
   }
 
   private fun registerConnection(socket: Socket, direction: String, listenerId: String?): String = synchronized(connectionLock) {
@@ -148,8 +251,8 @@ class PartnerControlModule : Module() {
     connections[connectionId] = ConnectionHandle(socket)
     val event = mutableMapOf<String, Any>("type" to "connected", "connectionId" to connectionId, "direction" to direction)
     if (listenerId != null) event["listenerId"] = listenerId
-    sendEvent("onPartnerControlEvent", event)
-    executor.execute { readLoop(connectionId, socket) }
+    emitEvent(event)
+    if (direction == "outbound") ioExecutor.execute { readLoop(connectionId, socket) }
     return connectionId
   }
 
@@ -161,7 +264,7 @@ class PartnerControlModule : Module() {
         if (length <= 0 || length > MAX_FRAME_BYTES) { emitError("invalid_frame_size", connectionId); break }
         val bytes = ByteArray(length)
         input.readFully(bytes)
-        sendEvent("onPartnerControlEvent", mapOf(
+        emitEvent(mapOf(
           "type" to "message",
           "connectionId" to connectionId,
           "frame" to String(bytes, StandardCharsets.UTF_8),
@@ -178,19 +281,22 @@ class PartnerControlModule : Module() {
   private fun closeConnection(connectionId: String, emit: Boolean) {
     val removed = synchronized(connectionLock) { connections.remove(connectionId) } ?: return
     try { removed.socket.close() } catch (_: Exception) { /* best effort */ }
-    if (emit) sendEvent("onPartnerControlEvent", mapOf("type" to "closed", "connectionId" to connectionId))
+    if (emit) emitEvent(mapOf("type" to "closed", "connectionId" to connectionId))
   }
 
   private fun emitError(code: String, connectionId: String?) {
     val event = mutableMapOf<String, Any>("type" to "error", "code" to code)
     if (connectionId != null) event["connectionId"] = connectionId
-    sendEvent("onPartnerControlEvent", event)
+    emitEvent(event)
+  }
+
+  private fun emitListenerError(code: String, listenerId: String) {
+    emitEvent(mapOf("type" to "error", "code" to code, "listenerId" to listenerId))
   }
 
   private fun shutdownAll() {
     listeners.keys.toList().forEach { id -> try { listeners.remove(id)?.socket?.close() } catch (_: Exception) { } }
     connections.keys.toList().forEach { id -> closeConnection(id, emit = false) }
-    executor.shutdownNow()
   }
 
   private fun activeWifiEndpoint(destination: Inet4Address? = null): WifiEndpoint? {

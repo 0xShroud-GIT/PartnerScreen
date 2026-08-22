@@ -2,12 +2,16 @@ import PartnerScreenCaptureModule from '../../../modules/partner-screen-capture'
 import type { PartnerScreenMediaEvent } from '../../../modules/partner-screen-capture';
 import { UUID_V4_RE } from '../../protocol/ControlMessage';
 import { isSafePrivateHostCandidate, isSafeVideoSdp } from '../../protocol/MediaValidation';
+import { sanitizeIceClassification } from '../../media/IceCandidateClassification';
 import { sanitizeMediaStats, type SanitizedMediaStats } from '../../media/MediaStats';
+import type { MediaIceConnectionState, MediaIceGatheringState } from '../../media/MediaTransportSnapshot';
 import type { MediaConnectionState, WebRtcMediaNativeEvent, WebRtcMediaPort } from '../../media/WebRtcMediaPort';
 
 const NATIVE_MEDIA_OPERATION_TIMEOUT_MS = 10_000;
 const NATIVE_MEDIA_CLOSE_TIMEOUT_MS = 3_000;
 const CONNECTION_STATES = new Set<MediaConnectionState>(['new', 'connecting', 'connected', 'disconnected', 'failed', 'closed']);
+const ICE_CONNECTION_STATES = new Set<MediaIceConnectionState>(['new', 'checking', 'connected', 'completed', 'failed', 'disconnected', 'closed']);
+const ICE_GATHERING_STATES = new Set<MediaIceGatheringState>(['new', 'gathering', 'complete']);
 
 function validSession(value: unknown): value is string { return typeof value === 'string' && UUID_V4_RE.test(value); }
 
@@ -81,6 +85,15 @@ export class ExpoWebRtcMedia implements WebRtcMediaPort {
   async close(sessionId: string): Promise<void> {
     if (!validSession(sessionId)) return;
     await withTimeout(PartnerScreenCaptureModule.closeMedia(sessionId), NATIVE_MEDIA_CLOSE_TIMEOUT_MS, 'Media close timed out.').catch(() => undefined);
+  }
+
+  async restartIce(sessionId: string): Promise<boolean> {
+    if (!validSession(sessionId)) return false;
+    try {
+      return await withTimeout(PartnerScreenCaptureModule.restartIce(sessionId), NATIVE_MEDIA_CLOSE_TIMEOUT_MS, 'ICE restart timed out.');
+    } catch {
+      return false;
+    }
   }
 
   async getStats(sessionId: string): Promise<SanitizedMediaStats | null> {

@@ -71,8 +71,6 @@ final class SyntheticTestCapturer implements VideoCapturer {
     if (!capturing || observer == null) return;
     int index = frameCounter.incrementAndGet();
     JavaI420Buffer buffer = JavaI420Buffer.allocate(width, height);
-    // Moving luma bars encode the low bits of the frame counter. They are visually
-    // obvious in emulator screenshots and guarantee that a frozen frame is detectable.
     fillLumaPattern(buffer, index);
     fill(buffer.getDataU(), buffer.getStrideU() * ((height + 1) / 2), (byte) 128);
     fill(buffer.getDataV(), buffer.getStrideV() * ((height + 1) / 2), (byte) 128);
