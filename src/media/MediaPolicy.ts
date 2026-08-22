@@ -5,18 +5,7 @@ export const SCREEN_MAX_BITRATE_BPS = 8_000_000;
 export const MEDIA_DISCONNECTED_GRACE_MS = 3_000;
 export const MEDIA_RESTART_DELAYS_MS = [500, 1_000, 2_000] as const;
 export const MEDIA_SIGNAL_RETRY_MS = 1_000;
-// Legacy constants retained for protocol-v1 backward-compatibility documentation.
-// MEDIA_KEYFRAME_REQUEST_DELAYS_MS and MEDIA_KEYFRAME_STEADY_RETRY_MS described the
-// old requester-side keyframe request schedule that was removed in the WebRTC stabilization
-// pass (PR #23). Current code does NOT send MEDIA_KEYFRAME_REQUEST and does NOT use these
-// delays. libwebrtc owns RTCP PLI/FIR/keyframe behavior. These constants remain only so
-// that existing tests that assert the policy profile still compile. Do not use in media logic.
-export const MEDIA_KEYFRAME_REQUEST_DELAYS_MS = [500, 1_500, 3_000] as const;
-export const MEDIA_KEYFRAME_STEADY_RETRY_MS = 5_000;
 export const MEDIA_STATS_INTERVAL_MS = 2_000;
-// Android MediaProjection consent must settle (grant or deny) within a bounded window. A prompt
-// that never delivers an ActivityResult (activity recreation, OS quirk) must fail closed instead of
-// leaving the sharer stuck on "waiting for permission" forever and blocking the media operation queue.
 export const MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS = 60_000;
 
 export type CandidateDecision = {
@@ -39,14 +28,6 @@ export type SenderBitratePatch = {
   applicable: boolean;
 };
 
-/**
- * Builds the sender parameter patch that encodes Chirp's high-quality LAN screen-share profile.
- *
- * It intentionally returns `applicable: false` when the sender reports no encodings yet. Fabricating a
- * `[{}]` encoding here would desynchronize the JS encodings array from the native libwebrtc encoding list
- * (react-native-webrtc rejects setParameters when the arrays differ in size), which would abort the share.
- * In that case the caller should leave bitrate unconfigured (a quality preference, never session-fatal).
- */
 export function senderBitrateParameters(
   encodings: ReadonlyArray<Record<string, unknown>> | null | undefined,
 ): SenderBitratePatch {
