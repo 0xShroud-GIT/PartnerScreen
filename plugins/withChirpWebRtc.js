@@ -6,6 +6,7 @@ const FORBIDDEN_DEBUG_PERMISSIONS = [
   'android.permission.RECORD_AUDIO',
   'android.permission.SYSTEM_ALERT_WINDOW',
 ];
+const DEBUG_MANIFEST_VARIANTS = ['debug', 'debugOptimized'];
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -54,25 +55,29 @@ module.exports = function withChirpWebRtc(config) {
   });
 
   return withDangerousMod(config, ['android', async (config) => {
-    const manifestPath = path.join(
-      config.modRequest.platformProjectRoot,
-      'app',
-      'src',
-      'debug',
-      'AndroidManifest.xml',
-    );
-    if (!fs.existsSync(manifestPath)) {
-      throw new Error('Expected Expo Android debug manifest was not generated.');
-    }
-
-    const source = fs.readFileSync(manifestPath, 'utf8');
-    const next = stripForbiddenDebugPermissions(source);
-    for (const permission of FORBIDDEN_DEBUG_PERMISSIONS) {
-      if (next.includes(permission)) {
-        throw new Error(`Forbidden debug permission remains after prebuild: ${permission}`);
+    for (const variant of DEBUG_MANIFEST_VARIANTS) {
+      const manifestPath = path.join(
+        config.modRequest.platformProjectRoot,
+        'app',
+        'src',
+        variant,
+        'AndroidManifest.xml',
+      );
+      if (!fs.existsSync(manifestPath)) {
+        throw new Error(`Expected Expo Android ${variant} manifest was not generated.`);
       }
+
+      const source = fs.readFileSync(manifestPath, 'utf8');
+      const next = stripForbiddenDebugPermissions(source);
+      for (const permission of FORBIDDEN_DEBUG_PERMISSIONS) {
+        if (next.includes(permission)) {
+          throw new Error(
+            `Forbidden debug permission remains after prebuild in ${variant}: ${permission}`,
+          );
+        }
+      }
+      fs.writeFileSync(manifestPath, next.endsWith('\n') ? next : `${next}\n`);
     }
-    fs.writeFileSync(manifestPath, next.endsWith('\n') ? next : `${next}\n`);
     return config;
   }]);
 };
