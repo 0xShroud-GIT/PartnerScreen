@@ -4,6 +4,8 @@ export const SCREEN_MIN_BITRATE_BPS = 1_000_000;
 export const SCREEN_MAX_BITRATE_BPS = 8_000_000;
 export const MEDIA_DISCONNECTED_GRACE_MS = 3_000;
 export const MEDIA_RESTART_DELAYS_MS = [500, 1_000, 2_000] as const;
+export const MEDIA_KEYFRAME_REQUEST_DELAYS_MS = [500, 1_500, 3_000] as const;
+export const MEDIA_KEYFRAME_TOGGLE_MS = 80;
 export const MEDIA_STATS_INTERVAL_MS = 2_000;
 
 export type CandidateDecision = {
