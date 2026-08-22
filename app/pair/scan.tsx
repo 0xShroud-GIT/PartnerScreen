@@ -47,13 +47,13 @@ export default function ScanPairScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text accessibilityRole="header" style={styles.title}>Scan partner QR</Text>
-      <Text style={styles.help}>Only scan a QR shown inside PartnerScreen on the phone you intend to trust.</Text>
+      <Text style={styles.help}>Only scan a QR shown inside Chirp on the phone you intend to trust.</Text>
 
       {runtimeLabInput && scanning ? (
         <View style={styles.card}>
           <ActivityIndicator />
           <Text style={styles.label}>Runtime Lab pairing input ready</Text>
-          <Text style={styles.help}>Waiting for the emulator runner to provide the creator's real one-time QR payload. Normal PartnerScreen authentication and confirmation still apply.</Text>
+          <Text style={styles.help}>Waiting for the emulator runner to provide the creator's real one-time QR payload. Normal Chirp authentication and confirmation still apply.</Text>
         </View>
       ) : null}
 
@@ -105,7 +105,7 @@ export default function ScanPairScreen() {
         <View style={styles.card}>
           <ActivityIndicator />
           <Text style={styles.label}>Saving trust on both phones…</Text>
-          <Text style={styles.help}>Keep PartnerScreen open until pairing finishes.</Text>
+          <Text style={styles.help}>Keep Chirp open until pairing finishes.</Text>
         </View>
       ) : null}
 

@@ -47,7 +47,7 @@ import {
   type PairingTransport,
 } from '../platform/pairing/ExpoPairingTransport';
 import { systemRuntimeScheduler, type RuntimeScheduler, type RuntimeTimer } from '../runtime/RuntimeScheduler';
-import type { PairingTransportEvent } from '../../modules/partner-pairing-transport';
+import type { PairingTransportEvent } from '../../modules/chirp-pairing-transport';
 
 export interface PairingPeerIdentity {
   deviceId: string;
@@ -321,7 +321,7 @@ export class PairingService {
       await this.cleanupAttempt();
       this.setState({ kind: 'unpaired' });
     } catch (error) {
-      this.setState({ kind: 'error', message: this.safeMessage(error, 'Pairing stopped, but local cleanup could not be verified. Restart PartnerScreen before trying again.') });
+      this.setState({ kind: 'error', message: this.safeMessage(error, 'Pairing stopped, but local cleanup could not be verified. Restart Chirp before trying again.') });
       throw error;
     }
   }
@@ -334,7 +334,7 @@ export class PairingService {
       await this.record('pairing_revoked');
       this.setState({ kind: 'unpaired' });
     } catch (error) {
-      this.setState({ kind: 'error', message: this.safeMessage(error, 'PartnerScreen could not safely forget the trusted partner.') });
+      this.setState({ kind: 'error', message: this.safeMessage(error, 'Chirp could not safely forget the trusted partner.') });
       throw error;
     }
   }
@@ -523,7 +523,7 @@ export class PairingService {
         } catch (error) {
           this.setState({
             kind: 'error',
-            message: this.safeMessage(error, 'The other phone cancelled, but local cleanup could not be verified. Restart PartnerScreen before trying again.'),
+            message: this.safeMessage(error, 'The other phone cancelled, but local cleanup could not be verified. Restart Chirp before trying again.'),
           });
         }
         return;
@@ -670,7 +670,7 @@ export class PairingService {
         kind: 'error',
         message: this.safeMessage(
           cleanupError,
-          'Pairing failed and local cleanup could not be verified. Restart PartnerScreen before trying again.',
+          'Pairing failed and local cleanup could not be verified. Restart Chirp before trying again.',
         ),
       });
     }
@@ -735,7 +735,7 @@ export class PairingService {
   private safeMessage(error: unknown, fallback: string): string {
     if (error instanceof PairingTransportError || error instanceof PairingQrError) return error.message;
     if (error instanceof PairTrustPersistenceError) {
-      return 'PartnerScreen could not safely update local pairing trust. Restart the app before trying again.';
+      return 'Chirp could not safely update local pairing trust. Restart the app before trying again.';
     }
     if (error instanceof PairingProtocolError) {
       return 'Authenticated pairing failed. Start again with a fresh QR code.';

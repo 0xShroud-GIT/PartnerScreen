@@ -42,7 +42,7 @@ export function buildDiagnosticReport(input: DiagnosticReportInput): string {
     `rendererGeometry=${rendererGeometry(media)}`,
   ] : [];
   const lines = [
-    'PartnerScreen diagnostic report',
+    'Chirp diagnostic report',
     `generatedAt=${input.generatedAt}`,
     `appVersion=${input.build.appVersion}`,
     `buildCommit=${input.build.buildCommit ?? 'development'}`,

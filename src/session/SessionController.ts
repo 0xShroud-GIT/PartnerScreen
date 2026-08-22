@@ -74,7 +74,7 @@ export class SessionController {
       await this.record('session_requested');
     } catch {
       await this.record('control_transport_failed'); await this.control.close().catch(() => undefined);
-      this.setState({ type: 'Error', pair, message: 'PartnerScreen could not open an authenticated request channel. Try again.' });
+      this.setState({ type: 'Error', pair, message: 'Chirp could not open an authenticated request channel. Try again.' });
     }
   }); }
   acceptRequest(): Promise<void> { return this.enqueue(async () => { if (this.state.type !== 'IncomingRequest') return; const current = this.state; this.clearTimeout(); await this.pendingStore.clear().catch(() => undefined); await this.control.send('ACCEPT_SCREEN', {}); this.setState({ type: 'Connected', pair: current.pair, sessionId: current.sessionId, role: 'sharer' }); await this.record('session_accepted'); await this.record('session_connected'); }); }
@@ -106,7 +106,7 @@ export class SessionController {
     const pair = this.state.pair;
     await this.control.send('SESSION_ERROR', { reason }).catch(() => undefined);
     await this.control.close().catch(() => undefined);
-    this.setState({ type: 'Error', pair, message: reason === 'capture_revoked' ? 'Android stopped screen sharing.' : reason === 'media_failed' ? 'PartnerScreen could not continue the private video connection.' : 'PartnerScreen could not continue screen sharing.' });
+    this.setState({ type: 'Error', pair, message: reason === 'capture_revoked' ? 'Android stopped screen sharing.' : reason === 'media_failed' ? 'Chirp could not continue the private video connection.' : 'Chirp could not continue screen sharing.' });
     await this.record('session_error');
   }); }
 

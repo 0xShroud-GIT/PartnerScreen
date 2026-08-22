@@ -5,7 +5,7 @@ import { AvailabilityService, type AvailabilityDiagnostics, type PairSecretSourc
 import type { DiagnosticEventKind } from '../src/domain/diagnostics/DiagnosticEvent';
 import { HmacDiscoveryAuthenticator, type HmacSha256 } from '../src/domain/discovery/TrustedDiscoveryAuthenticator';
 import type { PairTrustMetadata } from '../src/domain/pairing/PairTrustRepository';
-import type { DiscoveryAdvertisementPreparation, DiscoveryRegistration, PartnerDiscovery, PartnerDiscoveryEvent } from '../src/platform/discovery/PartnerDiscovery';
+import type { DiscoveryAdvertisementPreparation, DiscoveryRegistration, ChirpDiscovery, ChirpDiscoveryEvent } from '../src/platform/discovery/ChirpDiscovery';
 
 class NodeHmacSha256 implements HmacSha256 {
   async macHex(keyHex: string, message: string): Promise<string> { return createHmac('sha256', Buffer.from(keyHex, 'hex')).update(message, 'ascii').digest('hex'); }
@@ -20,10 +20,10 @@ class FakeControlListener implements ControlListenerSource {
   subscribeListenerChanges(listener: () => void): () => void { this.changeListeners.add(listener); return () => this.changeListeners.delete(listener); }
   emitChange(): void { for (const listener of this.changeListeners) listener(); }
 }
-class FakeDiscovery implements PartnerDiscovery {
-  readonly listeners = new Set<(event: PartnerDiscoveryEvent) => void>();
+class FakeDiscovery implements ChirpDiscovery {
+  readonly listeners = new Set<(event: ChirpDiscoveryEvent) => void>();
   readonly preparation: DiscoveryAdvertisementPreparation = { advertisementId: 'advertisement-local', host: '192.168.18.10', port: 41001, nonce: '10'.repeat(16) };
-  readonly registration: DiscoveryRegistration = { serviceName: 'PartnerScreen-local' };
+  readonly registration: DiscoveryRegistration = { serviceName: 'Chirp-local' };
   startArgs: { advertisementId: string; peerHint: string; proof: string } | null = null;
   probeCalls: Array<{ host: string; port: number }> = [];
   stopCount = 0;
@@ -55,8 +55,8 @@ class FakeDiscovery implements PartnerDiscovery {
     for (const pending of this.deferredProbes.splice(0)) pending.reject(new Error('unreachable'));
   }
   async stop(): Promise<void> { this.stopCount += 1; }
-  subscribe(listener: (event: PartnerDiscoveryEvent) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
-  emit(event: PartnerDiscoveryEvent): void { for (const listener of this.listeners) listener(event); }
+  subscribe(listener: (event: ChirpDiscoveryEvent) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  emit(event: ChirpDiscoveryEvent): void { for (const listener of this.listeners) listener(event); }
 }
 
 const pair: PairTrustMetadata = { schemaVersion: 1, protocolVersion: 1, status: 'confirmed', pairId: '11111111-1111-4111-8111-111111111111', partnerDeviceId: '22222222-2222-4222-8222-222222222222', partnerDeviceName: 'Claire', pairedAt: '2026-08-18T12:00:00.000Z' };
@@ -75,7 +75,7 @@ async function trustedRemote(authenticator: HmacDiscoveryAuthenticator, override
     controlPort: overrides?.controlPort ?? 45002,
   };
   return {
-    serviceName: overrides?.serviceName ?? 'PartnerScreen-remote',
+    serviceName: overrides?.serviceName ?? 'Chirp-remote',
     host: remote.host,
     port: remote.port,
     peerHint: await authenticator.derivePeerHint(secret, remote.nonce),
@@ -135,7 +135,7 @@ test('only loss of the matched trusted service changes available to offline', as
   await service.activate(pair); discovery.emit({ type: 'service_resolved', service: await trustedRemote(authenticator) }); await settle();
   assert.equal(service.getSnapshot().kind, 'available');
   discovery.emit({ type: 'service_lost', serviceName: 'unrelated-service' }); await settle(); assert.equal(service.getSnapshot().kind, 'available');
-  discovery.emit({ type: 'service_lost', serviceName: 'PartnerScreen-remote' }); await settle(); assert.equal(service.getSnapshot().kind, 'offline');
+  discovery.emit({ type: 'service_lost', serviceName: 'Chirp-remote' }); await settle(); assert.equal(service.getSnapshot().kind, 'offline');
 });
 
 test('probe failure remains offline and start failure never leaks raw native text', async () => {
@@ -165,7 +165,7 @@ test('a stale resolution from an older advertisement cannot overwrite the curren
   // but its probe endpoint was closed when the partner re-advertised, so the probe gate rejects it.
   const staleRemote = { nonce: '30'.repeat(16), host: '192.168.18.12', port: 42003, controlPort: 45003 };
   const stale = {
-    serviceName: 'PartnerScreen-remote-old',
+    serviceName: 'Chirp-remote-old',
     host: staleRemote.host,
     port: staleRemote.port,
     peerHint: await authenticator.derivePeerHint(secret, staleRemote.nonce),
@@ -207,7 +207,7 @@ test('a stale control-endpoint probe cannot become available after a newer gener
   const { discovery, authenticator, service } = makeHarness();
   await service.activate(pair);
   discovery.deferProbe = true;
-  const stale = await trustedRemote(authenticator, { nonce: '30'.repeat(16), host: '192.168.18.12', port: 42003, controlPort: 45003, serviceName: 'PartnerScreen-remote-old' });
+  const stale = await trustedRemote(authenticator, { nonce: '30'.repeat(16), host: '192.168.18.12', port: 42003, controlPort: 45003, serviceName: 'Chirp-remote-old' });
   discovery.emit({ type: 'service_resolved', service: stale });
   await settle();
   assert.equal(service.getSnapshot().kind, 'offline');
@@ -264,7 +264,7 @@ test('slow reachability of an older service does not block a newer valid control
   const { discovery, authenticator, service } = makeHarness();
   await service.activate(pair);
   discovery.deferProbe = true;
-  const older = await trustedRemote(authenticator, { nonce: '40'.repeat(16), host: '192.168.18.13', port: 42004, controlPort: 45004, serviceName: 'PartnerScreen-remote-slow' });
+  const older = await trustedRemote(authenticator, { nonce: '40'.repeat(16), host: '192.168.18.13', port: 42004, controlPort: 45004, serviceName: 'Chirp-remote-slow' });
   discovery.emit({ type: 'service_resolved', service: older });
   await settle();
   assert.equal(service.getSnapshot().kind, 'offline');

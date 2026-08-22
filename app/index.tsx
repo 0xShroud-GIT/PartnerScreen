@@ -65,7 +65,7 @@ export default function HomeScreen() {
   }, [paired?.pairId]);
 
   // All hooks stay above this conditional return. React hook order must never depend on identity loading.
-  if (identityState.loading) return <View style={styles.center}><ActivityIndicator accessibilityLabel="Loading PartnerScreen" /><Text>Preparing this device…</Text></View>;
+  if (identityState.loading) return <View style={styles.center}><ActivityIndicator accessibilityLabel="Loading Chirp" /><Text>Preparing this device…</Text></View>;
 
   const available = paired && availability.state.kind === 'available' && availability.state.pair.pairId === paired.pairId;
   const notificationPromptable = notificationPermission === 'unknown' || notificationPermission === 'requestable' || notificationPermission === 'dismissed';
@@ -83,7 +83,7 @@ export default function HomeScreen() {
 
   return (
     <ScrollView contentContainerStyle={[styles.container, { paddingTop: Math.max(22, insets.top + 12), paddingBottom: Math.max(44, insets.bottom + 20), paddingLeft: Math.max(22, insets.left + 12), paddingRight: Math.max(22, insets.right + 12) } ]} keyboardShouldPersistTaps="handled">
-      <Text accessibilityRole="header" style={styles.title}>PartnerScreen</Text>
+      <Text accessibilityRole="header" style={styles.title}>Chirp</Text>
       <Text style={styles.subtitle}>Private trusted-partner screen sharing</Text>
 
       <View accessibilityLabel={`Current state: ${product.label}. ${product.detail}`} style={[styles.statusCard, productToneStyle]}>
@@ -140,7 +140,7 @@ export default function HomeScreen() {
 
         {session.state.type === 'PairedAvailable' ? <Pressable accessibilityRole="button" accessibilityLabel="Request partner screen" accessibilityHint="Sends an authenticated screen-sharing request. This does not start capture automatically." onPress={() => { void session.requestScreen(); }} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>Request Screen</Text></Pressable> : null}
         {session.state.type === 'OutgoingRequest' ? <><Text accessibilityLiveRegion="polite" style={styles.label}>Request pending</Text><Pressable accessibilityRole="button" accessibilityLabel="Cancel screen request" onPress={() => { void session.cancelRequest(); }} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}><Text style={styles.secondaryText}>Cancel request</Text></Pressable></> : null}
-        {session.state.type === 'IncomingRequest' ? <><Text accessibilityRole="alert" style={styles.partner}>Screen request received</Text><Text style={styles.help}>Accepting opens Android's own screen-sharing permission UI. PartnerScreen cannot bypass it.</Text><Pressable accessibilityRole="button" accessibilityLabel="Accept screen request and choose screen" accessibilityHint="Accepts the trusted request, then opens Android system screen-capture consent." onPress={() => { void session.acceptRequest(); }} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>Accept and choose screen</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Decline screen request" onPress={() => { void session.declineRequest(); }} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}><Text style={styles.secondaryText}>Decline</Text></Pressable></> : null}
+        {session.state.type === 'IncomingRequest' ? <><Text accessibilityRole="alert" style={styles.partner}>Screen request received</Text><Text style={styles.help}>Accepting opens Android's own screen-sharing permission UI. Chirp cannot bypass it.</Text><Pressable accessibilityRole="button" accessibilityLabel="Accept screen request and choose screen" accessibilityHint="Accepts the trusted request, then opens Android system screen-capture consent." onPress={() => { void session.acceptRequest(); }} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>Accept and choose screen</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Decline screen request" onPress={() => { void session.declineRequest(); }} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}><Text style={styles.secondaryText}>Decline</Text></Pressable></> : null}
 
         {session.state.type === 'Connected' && session.state.role === 'sharer' ? <View style={styles.section}>
           <Text accessibilityRole="header" style={styles.label}>Sharing phone</Text>
@@ -181,7 +181,7 @@ export default function HomeScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Enable notifications"
-            accessibilityHint="Requests notification permission from Android while PartnerScreen is visible."
+            accessibilityHint="Requests notification permission from Android while Chirp is visible."
             onPress={async () => {
               const result = await appServices.requestNotificationPort.requestPermissionFromForeground().catch(() => 'unknown' as NotificationPermissionState);
               setNotificationPermission(result);

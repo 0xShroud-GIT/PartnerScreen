@@ -1,7 +1,0 @@
-appId: com.partnerscreen.app
----
-- tapOn: "Show pairing QR"
-- extendedWaitUntil:
-    visible: "Scan this QR on the other phone"
-    timeout: 10000
-- assertVisible: "Temporary PartnerScreen pairing QR code"

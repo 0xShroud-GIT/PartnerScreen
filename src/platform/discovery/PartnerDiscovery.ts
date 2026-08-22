@@ -18,15 +18,15 @@ export interface ResolvedPartnerService {
   proof: string;
 }
 
-export type PartnerDiscoveryEvent =
+export type ChirpDiscoveryEvent =
   | { type: 'service_resolved'; service: ResolvedPartnerService }
   | { type: 'service_lost'; serviceName: string }
   | { type: 'error'; code: string };
 
-export interface PartnerDiscovery {
+export interface ChirpDiscovery {
   prepareAdvertisement(): Promise<DiscoveryAdvertisementPreparation>;
   start(advertisementId: string, peerHint: string, proof: string): Promise<DiscoveryRegistration>;
   probe(host: string, port: number): Promise<void>;
   stop(): Promise<void>;
-  subscribe(listener: (event: PartnerDiscoveryEvent) => void): () => void;
+  subscribe(listener: (event: ChirpDiscoveryEvent) => void): () => void;
 }

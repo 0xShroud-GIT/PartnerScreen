@@ -34,7 +34,7 @@ function remote<T extends ControlMessageType>(type: T, payload: ControlPayloadMa
 
 test('request accept and stop lifecycle never implies capture or LIVE', async () => {
   const { control, controller, diagnostics } = harness(); await controller.activatePair(pair);
-  controller.updateAvailability({ kind: 'available', pair, endpoint: { host: '192.168.1.11', port: 45001 }, serviceName: 'PartnerScreen-peer' });
+  controller.updateAvailability({ kind: 'available', pair, endpoint: { host: '192.168.1.11', port: 45001 }, serviceName: 'Chirp-peer' });
   assert.equal(controller.getSnapshot().type, 'PairedAvailable'); await controller.requestScreen(); assert.equal(controller.getSnapshot().type, 'OutgoingRequest'); assert.equal(control.sent[0]?.type, 'REQUEST_SCREEN');
   control.emit({ type: 'message', message: remote('ACCEPT_SCREEN', {}) }); await settle(); const connected = controller.getSnapshot(); assert.equal(connected.type, 'Connected'); if (connected.type === 'Connected') assert.equal(connected.role, 'requester');
   await controller.endSession(); assert.equal(controller.getSnapshot().type, 'PairedAvailable'); assert.equal(control.sent.at(-1)?.type, 'SESSION_END'); assert.ok(diagnostics.events.includes('session_connected')); controller.dispose();

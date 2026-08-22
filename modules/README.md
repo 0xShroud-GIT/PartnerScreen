@@ -1,6 +1,6 @@
 # Local Expo Modules
 
-PartnerScreen-specific Android capability boundaries live here. Product/session state stays in TypeScript; these modules own only the native resources and primitives they expose.
+Chirp-specific Android capability boundaries live here. Product/session state stays in TypeScript; these modules own only the native resources and primitives they expose.
 
 Current modules:
 

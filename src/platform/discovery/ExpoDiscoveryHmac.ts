@@ -7,7 +7,7 @@ interface NativeDiscoveryAuthModule {
 function getNativeModule(): NativeDiscoveryAuthModule {
   // Deferred so headless domain tests never evaluate an Android-only native module.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require('../../../modules/partner-discovery-auth').default as NativeDiscoveryAuthModule;
+  return require('../../../modules/chirp-discovery-auth').default as NativeDiscoveryAuthModule;
 }
 
 export class ExpoDiscoveryHmac implements HmacSha256 {

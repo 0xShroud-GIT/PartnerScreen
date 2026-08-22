@@ -43,8 +43,8 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <Stack screenOptions={{ headerTitle: 'PartnerScreen' }}>
-      <Stack.Screen name="index" options={{ title: 'PartnerScreen' }} />
+    <Stack screenOptions={{ headerTitle: 'Chirp' }}>
+      <Stack.Screen name="index" options={{ title: 'Chirp' }} />
       <Stack.Screen name="incoming-request/[sessionId]" options={{ headerShown: false, animation: 'none' }} />
       <Stack.Screen name="viewer" options={{ headerShown: false, animation: 'fade' }} />
       <Stack.Screen name="diagnostics" options={{ title: 'Diagnostics' }} />

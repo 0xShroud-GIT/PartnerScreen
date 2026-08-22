@@ -29,8 +29,8 @@ const decoder = new TextDecoder();
 // It contains no product/user secret and exists only to prove the native Expo AES bridge.
 const SELF_TEST_KEY_HEX = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';
 const SELF_TEST_IV_HEX = '101112131415161718191a1b';
-const SELF_TEST_AAD = 'PartnerScreen|AES-GCM|v1';
-const SELF_TEST_PLAINTEXT = 'PartnerScreen runtime crypto self-test';
+const SELF_TEST_AAD = 'Chirp|AES-GCM|v1';
+const SELF_TEST_PLAINTEXT = 'Chirp runtime crypto self-test';
 const SELF_TEST_COMBINED_HEX = '101112131415161718191a1b2d9fea6227ac48e0a9076d7861591b26b92427637ee234c39e8996087e2731b736c4236686d21053acab1591771a482c53aba36c1712';
 
 function asUint8Array(value: unknown): Uint8Array {

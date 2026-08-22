@@ -8,7 +8,7 @@ import {
 } from './DiagnosticEvent';
 import type { Clock } from '../identity/IdentityRepository';
 
-export const DIAGNOSTICS_STORAGE_KEY = '@partnerscreen/diagnostics/v1';
+export const DIAGNOSTICS_STORAGE_KEY = '@chirp/diagnostics/v1';
 
 export class DiagnosticsPersistenceError extends Error {
   constructor(message: string, options?: ErrorOptions) {

@@ -1,6 +1,0 @@
-appId: com.partnerscreen.app
----
-- tapOn: "Stop screen session"
-- extendedWaitUntil:
-    visible: "Trusted partner saved."
-    timeout: 15000

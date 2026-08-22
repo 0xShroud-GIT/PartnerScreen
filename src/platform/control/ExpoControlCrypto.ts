@@ -17,8 +17,8 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const SELF_TEST_KEY = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';
 const SELF_TEST_IV = '101112131415161718191a1b';
-const SELF_TEST_AAD = 'PartnerScreen|AES-GCM|v1';
-const SELF_TEST_TEXT = 'PartnerScreen runtime crypto self-test';
+const SELF_TEST_AAD = 'Chirp|AES-GCM|v1';
+const SELF_TEST_TEXT = 'Chirp runtime crypto self-test';
 const SELF_TEST_COMBINED = '101112131415161718191a1b2d9fea6227ac48e0a9076d7861591b26b92427637ee234c39e8996087e2731b736c4236686d21053acab1591771a482c53aba36c1712';
 
 function bytesToHex(bytes: Uint8Array): string {

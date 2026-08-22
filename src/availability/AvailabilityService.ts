@@ -3,10 +3,10 @@ import type { PairTrustMetadata } from '../domain/pairing/PairTrustRepository';
 import type { HmacDiscoveryAuthenticator } from '../domain/discovery/TrustedDiscoveryAuthenticator';
 import type {
   DiscoveryAdvertisementPreparation,
-  PartnerDiscovery,
-  PartnerDiscoveryEvent,
+  ChirpDiscovery,
+  ChirpDiscoveryEvent,
   ResolvedPartnerService,
-} from '../platform/discovery/PartnerDiscovery';
+} from '../platform/discovery/ChirpDiscovery';
 
 export type AvailabilitySnapshot =
   | { kind: 'inactive' }
@@ -35,9 +35,9 @@ interface ActiveAvailability {
 const SAFE_START_MESSAGES = new Set([
   'Trusted availability authentication could not be prepared.',
   'Trusted availability needs an active private IPv4 Wi-Fi network.',
-  'PartnerScreen could not prepare local availability.',
-  'PartnerScreen could not advertise and discover trusted availability on this Wi-Fi.',
-  'PartnerScreen control listener is unavailable.',
+  'Chirp could not prepare local availability.',
+  'Chirp could not advertise and discover trusted availability on this Wi-Fi.',
+  'Chirp control listener is unavailable.',
 ]);
 const GENERIC_START_MESSAGE = 'Trusted availability could not start. Check that both phones are on the same Wi-Fi, then retry.';
 function safeAvailabilityStartMessage(error: unknown): string {
@@ -59,7 +59,7 @@ export class AvailabilityService {
   constructor(
     private readonly pairSecrets: PairSecretSource,
     private readonly diagnostics: AvailabilityDiagnostics,
-    private readonly discovery: PartnerDiscovery,
+    private readonly discovery: ChirpDiscovery,
     private readonly authenticator: HmacDiscoveryAuthenticator,
     private readonly controlListener: ControlListenerSource,
   ) {
@@ -98,7 +98,7 @@ export class AvailabilityService {
       // older Wi-Fi host is what previously wedged inbound requests after Wi-Fi interruption/re-IP.
       const preparation = await this.discovery.prepareAdvertisement();
       const controlEndpoint = await this.controlListener.ensureListening(preparation.host);
-      if (controlEndpoint.host !== preparation.host) throw new Error('PartnerScreen control listener is unavailable.');
+      if (controlEndpoint.host !== preparation.host) throw new Error('Chirp control listener is unavailable.');
       const peerHint = await this.authenticator.derivePeerHint(pairSecretHex, preparation.nonce);
       const proof = await this.authenticator.createProof(pairSecretHex, { ...preparation, controlPort: controlEndpoint.port });
       const registration = await this.discovery.start(preparation.advertisementId, peerHint, proof);
@@ -124,7 +124,7 @@ export class AvailabilityService {
     if (hadActive && recordStop) await this.record('availability_stopped');
   }
 
-  private async handleDiscoveryEvent(event: PartnerDiscoveryEvent): Promise<void> {
+  private async handleDiscoveryEvent(event: ChirpDiscoveryEvent): Promise<void> {
     const active = this.active;
     if (!active) return;
     if (event.type === 'service_resolved') { await this.handleResolved(active, event.service); return; }
@@ -140,7 +140,7 @@ export class AvailabilityService {
     this.probeGeneration += 1;
     active.matchedServiceName = null;
     active.provenControl = null;
-    this.setState({ kind: 'offline', pair: active.pair, localAdvertised: true, message: 'Trusted discovery reported a local network error. PartnerScreen will remain fail-closed until the partner is proven reachable again.' });
+    this.setState({ kind: 'offline', pair: active.pair, localAdvertised: true, message: 'Trusted discovery reported a local network error. Chirp will remain fail-closed until the partner is proven reachable again.' });
     await this.record('availability_failed');
   }
 

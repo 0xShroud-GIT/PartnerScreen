@@ -121,7 +121,7 @@ export default function ViewerScreen() {
   if (!requesterSessionId) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator accessibilityLabel="Returning to PartnerScreen" />
+        <ActivityIndicator accessibilityLabel="Returning to Chirp" />
         <Text style={styles.centerText}>Session ended.</Text>
       </View>
     );

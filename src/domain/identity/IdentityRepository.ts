@@ -6,7 +6,7 @@ import {
   type LocalDeviceIdentity,
 } from './LocalDeviceIdentity';
 
-export const LOCAL_IDENTITY_STORAGE_KEY = '@partnerscreen/local-identity/v1';
+export const LOCAL_IDENTITY_STORAGE_KEY = '@chirp/local-identity/v1';
 
 export interface DeviceIdFactory {
   createDeviceId(): string;

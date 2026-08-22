@@ -14,7 +14,7 @@ import {
 import { PairingService } from '../src/application/PairingService';
 import type { PairingCrypto } from '../src/platform/pairing/ExpoPairingCrypto';
 import type { PairingTransport } from '../src/platform/pairing/ExpoPairingTransport';
-import type { PairingTransportEvent } from '../modules/partner-pairing-transport';
+import type { PairingTransportEvent } from '../modules/chirp-pairing-transport';
 
 class MemoryStore implements KeyValueStore {
   readonly values = new Map<string, string>();

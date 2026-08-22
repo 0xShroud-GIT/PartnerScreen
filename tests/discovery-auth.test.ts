@@ -15,7 +15,7 @@ function expectedHmac(message: string): string { return createHmac('sha256', Buf
 test('discovery hint stays opaque and rotates with advertisement nonce', async () => {
   const auth = new HmacDiscoveryAuthenticator(new NodeHmacSha256());
   const hint = await auth.derivePeerHint(secret, endpoint.nonce);
-  assert.equal(hint, expectedHmac(`PartnerScreen|discovery-hint|v1|${endpoint.nonce}`).slice(0, 32));
+  assert.equal(hint, expectedHmac(`Chirp|discovery-hint|v1|${endpoint.nonce}`).slice(0, 32));
   const rotatedNonce = '33'.repeat(16);
   assert.notEqual(await auth.derivePeerHint(secret, rotatedNonce), hint);
   assert.equal(await auth.verifyPeerHint(secret, endpoint.nonce, hint), true);
@@ -25,7 +25,7 @@ test('discovery hint stays opaque and rotates with advertisement nonce', async (
 test('discovery proof authenticates nonce host probe port and encoded control port', async () => {
   const auth = new HmacDiscoveryAuthenticator(new NodeHmacSha256());
   const proof = await auth.createProof(secret, endpoint);
-  const mac = expectedHmac(`PartnerScreen|discovery-proof|v2|${endpoint.nonce}|${endpoint.host}|${endpoint.port}|${endpoint.controlPort}`);
+  const mac = expectedHmac(`Chirp|discovery-proof|v2|${endpoint.nonce}|${endpoint.host}|${endpoint.port}|${endpoint.controlPort}`);
   assert.equal(proof, `${endpoint.controlPort.toString(16).padStart(4, '0')}${mac.slice(4)}`);
   assert.equal(proof.length, 64);
   assert.equal(auth.extractControlPort(proof), endpoint.controlPort);
@@ -47,6 +47,6 @@ test('discovery authentication rejects malformed values and proof-encoded invali
 });
 
 test('fixed HMAC-SHA256 known-answer vector matches the production 32-byte key contract', async () => {
-  const result = await new NodeHmacSha256().macHex('0b'.repeat(32), 'PartnerScreen|discovery-selftest|v1');
+  const result = await new NodeHmacSha256().macHex('0b'.repeat(32), 'Chirp|discovery-selftest|v1');
   assert.equal(result, '32c189446484d072bdfa7c0f1c13605c7f048820c3fe17753c4836b1f6dc22fd');
 });

@@ -1,20 +1,20 @@
 import type {
   DiscoveryAdvertisementPreparation,
   DiscoveryRegistration,
-  PartnerDiscovery,
-  PartnerDiscoveryEvent,
+  ChirpDiscovery,
+  ChirpDiscoveryEvent,
   ResolvedPartnerService,
-} from './PartnerDiscovery';
-import type { PartnerDiscoveryModuleEvents } from '../../../modules/partner-discovery';
+} from './ChirpDiscovery';
+import type { ChirpDiscoveryModuleEvents } from '../../../modules/chirp-discovery';
 
 type NativeDiscoveryModule = {
   prepareAdvertisement(): Promise<DiscoveryAdvertisementPreparation>;
   start(advertisementId: string, peerHint: string, proof: string): Promise<DiscoveryRegistration>;
   probe(host: string, port: number): Promise<void>;
   stop(): Promise<void>;
-  addListener<EventName extends keyof PartnerDiscoveryModuleEvents>(
+  addListener<EventName extends keyof ChirpDiscoveryModuleEvents>(
     eventName: EventName,
-    listener: PartnerDiscoveryModuleEvents[EventName],
+    listener: ChirpDiscoveryModuleEvents[EventName],
   ): { remove(): void };
 };
 
@@ -28,7 +28,7 @@ const ERROR_CODE_RE = /^[a-z0-9_]{1,64}$/;
 
 let nativeModule: NativeDiscoveryModule | null = null;
 function getNativeModule(): NativeDiscoveryModule {
-  if (!nativeModule) nativeModule = require('../../../modules/partner-discovery').default;
+  if (!nativeModule) nativeModule = require('../../../modules/chirp-discovery').default;
   return nativeModule;
 }
 
@@ -66,7 +66,7 @@ function parseResolvedService(value: unknown): ResolvedPartnerService | null {
   };
 }
 
-function parseEvent(value: unknown): PartnerDiscoveryEvent | null {
+function parseEvent(value: unknown): ChirpDiscoveryEvent | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
   if (item.type === 'service_resolved') {
@@ -89,7 +89,7 @@ function parseEvent(value: unknown): PartnerDiscoveryEvent | null {
   return null;
 }
 
-export class ExpoPartnerDiscovery implements PartnerDiscovery {
+export class ExpoChirpDiscovery implements ChirpDiscovery {
   async prepareAdvertisement(): Promise<DiscoveryAdvertisementPreparation> {
     try {
       const value = await getNativeModule().prepareAdvertisement();
@@ -108,7 +108,7 @@ export class ExpoPartnerDiscovery implements PartnerDiscovery {
       if (/Wi-?Fi|private IPv4|active network/i.test(raw)) {
         throw new Error('Trusted availability needs an active private IPv4 Wi-Fi network.');
       }
-      throw new Error('PartnerScreen could not prepare local availability.');
+      throw new Error('Chirp could not prepare local availability.');
     }
   }
 
@@ -120,7 +120,7 @@ export class ExpoPartnerDiscovery implements PartnerDiscovery {
       }
       return value;
     } catch {
-      throw new Error('PartnerScreen could not advertise and discover trusted availability on this Wi-Fi.');
+      throw new Error('Chirp could not advertise and discover trusted availability on this Wi-Fi.');
     }
   }
 
@@ -136,8 +136,8 @@ export class ExpoPartnerDiscovery implements PartnerDiscovery {
     await getNativeModule().stop();
   }
 
-  subscribe(listener: (event: PartnerDiscoveryEvent) => void): () => void {
-    const subscription = getNativeModule().addListener('onPartnerDiscoveryEvent', (event) => {
+  subscribe(listener: (event: ChirpDiscoveryEvent) => void): () => void {
+    const subscription = getNativeModule().addListener('onChirpDiscoveryEvent', (event) => {
       const parsed = parseEvent(event);
       if (parsed) listener(parsed);
     });

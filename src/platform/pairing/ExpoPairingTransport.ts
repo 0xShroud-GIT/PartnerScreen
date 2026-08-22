@@ -1,8 +1,8 @@
 import type {
   PairingListenerEndpoint,
   PairingTransportEvent,
-  PartnerPairingTransportModuleEvents,
-} from '../../../modules/partner-pairing-transport';
+  ChirpPairingTransportModuleEvents,
+} from '../../../modules/chirp-pairing-transport';
 import { PairingTransportError } from '../../domain/pairing/PairingTransportError';
 
 export { PairingTransportError } from '../../domain/pairing/PairingTransportError';
@@ -22,9 +22,9 @@ type NativePairingModule = {
   connect(host: string, port: number): Promise<string>;
   send(connectionId: string, frame: string): Promise<void>;
   close(connectionId: string): Promise<void>;
-  addListener<EventName extends keyof PartnerPairingTransportModuleEvents>(
+  addListener<EventName extends keyof ChirpPairingTransportModuleEvents>(
     eventName: EventName,
-    listener: PartnerPairingTransportModuleEvents[EventName],
+    listener: ChirpPairingTransportModuleEvents[EventName],
   ): { remove(): void };
 };
 
@@ -35,7 +35,7 @@ function getNativeModule(): NativePairingModule {
   if (!nativeModule) {
     // Keep Expo/native module evaluation behind the platform adapter. This file must remain safe
     // to import from Node headless tests that exercise the TypeScript pairing authority.
-    nativeModule = require('../../../modules/partner-pairing-transport').default;
+    nativeModule = require('../../../modules/chirp-pairing-transport').default;
   }
   return nativeModule;
 }
@@ -49,7 +49,7 @@ function mapListenerError(error: unknown): PairingTransportError {
   if (/Wi-?Fi|private IPv4/i.test(raw)) {
     return new PairingTransportError('wifi_unavailable', 'Pairing needs an active Wi-Fi connection with a local IPv4 address.');
   }
-  return new PairingTransportError('listener_failed', 'PartnerScreen could not open the temporary pairing listener on Wi-Fi.');
+  return new PairingTransportError('listener_failed', 'Chirp could not open the temporary pairing listener on Wi-Fi.');
 }
 
 function mapConnectError(error: unknown): PairingTransportError {
@@ -60,10 +60,10 @@ function mapConnectError(error: unknown): PairingTransportError {
   if (/EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|ECONNREFUSED|failed to connect|No route to host/i.test(raw)) {
     return new PairingTransportError(
       'partner_unreachable',
-      'PartnerScreen could not reach the other phone over Wi-Fi. Keep both phones on the same normal Wi-Fi and scan a fresh QR code.',
+      'Chirp could not reach the other phone over Wi-Fi. Keep both phones on the same normal Wi-Fi and scan a fresh QR code.',
     );
   }
-  return new PairingTransportError('connection_failed', 'PartnerScreen could not open the temporary pairing connection.');
+  return new PairingTransportError('connection_failed', 'Chirp could not open the temporary pairing connection.');
 }
 
 export class ExpoPairingTransport implements PairingTransport {
@@ -79,7 +79,7 @@ export class ExpoPairingTransport implements PairingTransport {
     try {
       await getNativeModule().stopListener(listenerId);
     } catch {
-      throw new PairingTransportError('cleanup_failed', 'PartnerScreen could not close the temporary pairing listener.');
+      throw new PairingTransportError('cleanup_failed', 'Chirp could not close the temporary pairing listener.');
     }
   }
 
@@ -103,7 +103,7 @@ export class ExpoPairingTransport implements PairingTransport {
     try {
       await getNativeModule().close(connectionId);
     } catch {
-      throw new PairingTransportError('cleanup_failed', 'PartnerScreen could not close the temporary pairing connection.');
+      throw new PairingTransportError('cleanup_failed', 'Chirp could not close the temporary pairing connection.');
     }
   }
 

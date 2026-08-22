@@ -3,10 +3,10 @@ import type { SecretStore } from '../security/SecretStore';
 import { normalizeDeviceName } from '../identity/LocalDeviceIdentity';
 import { PAIRING_PROTOCOL_VERSION } from './PairingQr';
 
-export const PAIR_METADATA_STORAGE_KEY = '@partnerscreen/pair-metadata/v1';
-export const PAIR_SECRET_STORAGE_KEY = 'partnerscreen.pair-secret.v1';
-export const PAIR_PENDING_METADATA_KEY = '@partnerscreen/pair-pending/v1';
-export const PAIR_PENDING_SECRET_KEY = 'partnerscreen.pair-pending-secret.v1';
+export const PAIR_METADATA_STORAGE_KEY = '@chirp/pair-metadata/v1';
+export const PAIR_SECRET_STORAGE_KEY = 'chirp.pair-secret.v1';
+export const PAIR_PENDING_METADATA_KEY = '@chirp/pair-pending/v1';
+export const PAIR_PENDING_SECRET_KEY = 'chirp.pair-pending-secret.v1';
 
 export type PairTrustStatus = 'committed' | 'confirmed';
 

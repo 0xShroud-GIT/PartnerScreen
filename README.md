@@ -1,6 +1,6 @@
-# PartnerScreen
+# Chirp
 
-PartnerScreen is an Android app for two trusted partners to pair once and, while on the same local network, request and explicitly approve live screen viewing.
+Chirp is an Android app for two trusted partners to pair once and, while on the same local network, request and explicitly approve live screen viewing.
 
 The product is privacy-first: capture requires the owner's approval and Android MediaProjection consent, media is direct peer-to-peer WebRTC, and V1 has no accounts, cloud signaling, recording, remote control, analytics, ads, microphone sharing, or TURN relay.
 
@@ -14,18 +14,18 @@ The product is privacy-first: capture requires the owner's approval and Android 
 - `org.jitsi:webrtc:124.0.0` inside the screen-capture native module
 - Android V1 only
 
-PartnerScreen requires a custom development/production build. Expo Go is not a valid product runtime for the native discovery, transport, MediaProjection, or WebRTC capabilities used here.
+Chirp requires a custom development/production build. Expo Go is not a valid product runtime for the native discovery, transport, MediaProjection, or WebRTC capabilities used here.
 
 ## Repository
 
 ```text
-PartnerScreen/
+Chirp/
 ├── README.md             # permanent human entry point
 ├── AGENTS.md             # permanent AI/developer working rules
 ├── CHECKPOINT.md         # current project state and next work
 ├── app/                  # Expo Router routes/screens
 ├── src/                  # TypeScript application/domain logic
-├── modules/              # PartnerScreen Kotlin Expo Modules
+├── modules/              # Chirp Kotlin Expo Modules
 ├── tests/                # product/regression tests
 ├── scripts/              # validation and Android build tooling
 ├── docs/                 # focused durable architecture/reference docs
@@ -67,7 +67,7 @@ For Android native generation/build work, use the development-build path rather 
 On a machine with the required Android SDK/JDK:
 
 ```bash
-export PARTNERSCREEN_BUILD_COMMIT="$(git rev-parse HEAD)"
+export CHIRP_BUILD_COMMIT="$(git rev-parse HEAD)"
 npm run build:dev-apk -- --preflight
 npm run build:dev-apk
 ```

@@ -52,7 +52,7 @@ export default function CreatePairScreen() {
       {pairing.state.kind === 'creator_qr' ? (
         <View style={styles.card}>
           <Text style={styles.label}>Scan this QR on the other phone</Text>
-          <View style={styles.qrBox} accessibilityLabel="Temporary PartnerScreen pairing QR code">
+          <View style={styles.qrBox} accessibilityLabel="Temporary Chirp pairing QR code">
             <QRCode value={pairing.state.qrPayload} size={240} quietZone={8} />
           </View>
           <Text style={styles.help}>Expires in {secondsLeft ?? '…'} seconds. A fresh one-time credential is inside the QR and is never saved as partner trust.</Text>

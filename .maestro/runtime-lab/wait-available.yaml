@@ -1,6 +1,0 @@
-appId: com.partnerscreen.app
----
-- extendedWaitUntil:
-    visible: "Available on Wi-Fi"
-    timeout: 20000
-- assertVisible: "Request Screen"

@@ -1,5 +1,5 @@
 {
-  "name": "partnerscreen",
+  "name": "chirp",
   "version": "0.0.1",
   "private": true,
   "main": "expo-router/entry",
@@ -32,7 +32,7 @@
     "test:runtime-lab": "tsc --noEmit -p tsconfig.runtime-lab-tests.json && tsx --test tests/runtime-lab/runtime-lab.test.ts",
     "test:runtime-lab:fuzz": "tsc --noEmit -p tsconfig.runtime-lab-tests.json && tsx --test tests/runtime-lab/runtime-fuzz.test.ts",
     "test:runtime-lab:all": "npm run test:runtime-lab && npm run test:runtime-lab:fuzz",
-    "test:runtime-lab:known": "PARTNERSCREEN_RUN_KNOWN_REGRESSIONS=1 tsx --test tests/runtime-lab/known-regressions.test.ts",
+    "test:runtime-lab:known": "CHIRP_RUN_KNOWN_REGRESSIONS=1 tsx --test tests/runtime-lab/known-regressions.test.ts",
     "check:baseline": "node scripts/verify-arena.mjs",
     "check:contracts": "node scripts/verify-pairing-crypto.mjs && node scripts/verify-m1.mjs && node scripts/verify-m2.mjs && node scripts/verify-m3.mjs && node scripts/verify-m4.mjs && node scripts/verify-m5.mjs && node scripts/verify-m6.mjs && node scripts/verify-m7.mjs && node scripts/verify-m8.mjs && node scripts/verify-m3-autolink.mjs && node scripts/verify-m4-autolink.mjs && node scripts/verify-m5-autolink.mjs && node scripts/verify-m6-autolink.mjs",
     "sanitize": "bash scripts/repo-sanitize.sh",

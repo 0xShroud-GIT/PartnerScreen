@@ -1,7 +1,7 @@
 import type { KeyValueStore } from '../domain/persistence/KeyValueStore';
 import { UUID_V4_RE } from '../protocol/ControlMessage';
 
-export const PENDING_REQUEST_STORAGE_KEY = '@partnerscreen/pending-request/v1';
+export const PENDING_REQUEST_STORAGE_KEY = '@chirp/pending-request/v1';
 
 export interface PendingRequestRecord {
   schemaVersion: 1;

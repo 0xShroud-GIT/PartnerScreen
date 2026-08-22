@@ -3,7 +3,7 @@ import { HmacDiscoveryAuthenticator } from '../domain/discovery/TrustedDiscovery
 import { IdentityRepository, type Clock } from '../domain/identity/IdentityRepository';
 import { PairTrustRepository } from '../domain/pairing/PairTrustRepository';
 import { ExpoDiscoveryHmac } from '../platform/discovery/ExpoDiscoveryHmac';
-import { ExpoPartnerDiscovery } from '../platform/discovery/ExpoPartnerDiscovery';
+import { ExpoChirpDiscovery } from '../platform/discovery/ExpoChirpDiscovery';
 import { ExpoDeviceIdFactory } from '../platform/identity/ExpoDeviceIdFactory';
 import { ExpoPairingCrypto } from '../platform/pairing/ExpoPairingCrypto';
 import { ExpoPairingTransport } from '../platform/pairing/ExpoPairingTransport';
@@ -49,7 +49,7 @@ const screenCaptureCoordinator = new ScreenCaptureCoordinator(screenCapturePort,
 const webRtcMediaPort = new ExpoWebRtcMedia();
 const mediaSessionController = new MediaSessionController(webRtcMediaPort, sessionController, screenCaptureCoordinator, diagnosticsRepository);
 const discoveryAuthenticator = new HmacDiscoveryAuthenticator(new ExpoDiscoveryHmac());
-const availabilityService = new AvailabilityService(pairTrustRepository, diagnosticsRepository, new ExpoPartnerDiscovery(), discoveryAuthenticator, controlSession);
+const availabilityService = new AvailabilityService(pairTrustRepository, diagnosticsRepository, new ExpoChirpDiscovery(), discoveryAuthenticator, controlSession);
 const requestNotificationPort = new ExpoRequestNotification();
 const incomingRequestNotifier = new IncomingRequestNotifier(sessionController, requestNotificationPort, diagnosticsRepository);
 const lifecyclePort = new ExpoLifecycle();

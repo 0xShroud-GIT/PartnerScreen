@@ -2,15 +2,15 @@ import type { ExpoConfig, ConfigContext } from 'expo/config';
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
-  name: 'PartnerScreen',
-  slug: 'partnerscreen',
-  scheme: 'partnerscreen',
+  name: 'Chirp',
+  slug: 'chirp',
+  scheme: 'chirp',
   version: '0.0.1',
   platforms: ['android'],
   orientation: 'default',
   userInterfaceStyle: 'automatic',
   android: {
-    package: 'com.partnerscreen.app',
+    package: 'com.chirp.app',
     versionCode: 1,
     allowBackup: false,
     permissions: [
@@ -43,7 +43,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ],
   extra: {
     ...config.extra,
-    buildCommit: process.env.PARTNERSCREEN_BUILD_COMMIT ?? process.env.GITHUB_SHA ?? null,
+    buildCommit: process.env.CHIRP_BUILD_COMMIT ?? process.env.GITHUB_SHA ?? null,
   },
   experiments: { typedRoutes: true },
 });
