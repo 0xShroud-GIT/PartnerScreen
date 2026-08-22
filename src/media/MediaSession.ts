@@ -119,6 +119,7 @@ export class MediaSession {
   private acceptedRemoteCandidates = 0;
   private rejectedRemoteCandidates = 0;
   private stats: MediaStatsSnapshot | null = null;
+  private lastDiagnostic: MediaDiagnosticSnapshot | null = null;
   private previousSent: ByteSample | null = null;
   private previousReceived: ByteSample | null = null;
   private operationQueue: Promise<void> = Promise.resolve();
@@ -138,23 +139,13 @@ export class MediaSession {
   getSnapshot = (): MediaState => this.state;
   getRemoteStreamURL = (): string | null => this.remoteStreamURL;
   getStatsSnapshot = (): MediaStatsSnapshot | null => this.stats;
-  getDiagnosticSnapshot = (): MediaDiagnosticSnapshot => ({
-    state: this.state.type,
-    role: this.role ?? undefined,
-    connectionState: this.peer?.connectionState,
-    iceConnectionState: this.peer?.iceConnectionState,
-    iceGatheringState: this.peer?.iceGatheringState,
-    signalingState: this.peer?.signalingState,
-    remoteTrackSeen: this.remoteTrackSeen,
-    firstFrameSeen: this.firstFrameSeen,
-    acceptedLocalCandidates: this.acceptedLocalCandidates,
-    rejectedLocalCandidates: this.rejectedLocalCandidates,
-    acceptedRemoteCandidates: this.acceptedRemoteCandidates,
-    rejectedRemoteCandidates: this.rejectedRemoteCandidates,
-    restartAttempts: this.restartAttempt,
-    bitrateParametersApplied: this.bitrateParametersApplied,
-    stats: this.stats,
-  });
+  getDiagnosticSnapshot = (): MediaDiagnosticSnapshot => {
+    const current = this.currentDiagnosticSnapshot();
+    if (current.state === 'idle' && !this.peer && !this.localStream && !this.remoteStream && this.lastDiagnostic) {
+      return this.lastDiagnostic;
+    }
+    return current;
+  };
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -169,6 +160,7 @@ export class MediaSession {
       if (this.localStream && this.peerSessionId === sessionId) return;
 
       await this.resetMedia(false);
+      this.lastDiagnostic = null;
       this.peerSessionId = sessionId;
       this.role = 'sharer';
       this.setState({ type: 'awaiting_permission', sessionId });
@@ -257,6 +249,7 @@ export class MediaSession {
     if (product.role === 'requester') {
       if (this.peerSessionId !== product.sessionId || this.role !== 'requester') {
         await this.resetMedia(false);
+        this.lastDiagnostic = null;
         this.peerSessionId = product.sessionId;
         this.role = 'requester';
         this.createPeer(product.sessionId, 'requester').addTransceiver('video', { direction: 'recvonly' });
@@ -531,6 +524,9 @@ export class MediaSession {
   }
 
   private async resetMedia(recordCaptureStop: boolean): Promise<void> {
+    if (this.state.type !== 'idle' || this.peer || this.localStream || this.remoteStream) {
+      this.lastDiagnostic = this.currentDiagnosticSnapshot();
+    }
     this.clearDisconnectedTimer();
     if (this.restartTimer) clearTimeout(this.restartTimer);
     if (this.statsTimer) clearTimeout(this.statsTimer);
@@ -564,6 +560,26 @@ export class MediaSession {
     this.previousReceived = null;
     this.setState({ type: 'idle' });
     if (recordCaptureStop && hadCapture) await this.record('capture_stopped');
+  }
+
+  private currentDiagnosticSnapshot(): MediaDiagnosticSnapshot {
+    return {
+      state: this.state.type,
+      role: this.role ?? undefined,
+      connectionState: this.peer?.connectionState,
+      iceConnectionState: this.peer?.iceConnectionState,
+      iceGatheringState: this.peer?.iceGatheringState,
+      signalingState: this.peer?.signalingState,
+      remoteTrackSeen: this.remoteTrackSeen,
+      firstFrameSeen: this.firstFrameSeen,
+      acceptedLocalCandidates: this.acceptedLocalCandidates,
+      rejectedLocalCandidates: this.rejectedLocalCandidates,
+      acceptedRemoteCandidates: this.acceptedRemoteCandidates,
+      rejectedRemoteCandidates: this.rejectedRemoteCandidates,
+      restartAttempts: this.restartAttempt,
+      bitrateParametersApplied: this.bitrateParametersApplied,
+      stats: this.stats ? { ...this.stats } : null,
+    };
   }
 
   private closePeer(): void {
