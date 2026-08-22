@@ -9,6 +9,10 @@ export const MEDIA_KEYFRAME_REQUEST_DELAYS_MS = [500, 1_500, 3_000] as const;
 export const MEDIA_KEYFRAME_STEADY_RETRY_MS = 5_000;
 export const MEDIA_KEYFRAME_TOGGLE_MS = 80;
 export const MEDIA_STATS_INTERVAL_MS = 2_000;
+// Android MediaProjection consent must settle (grant or deny) within a bounded window. A prompt
+// that never delivers an ActivityResult (activity recreation, OS quirk) must fail closed instead of
+// leaving the sharer stuck on "waiting for permission" forever and blocking the media operation queue.
+export const MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS = 60_000;
 
 export type CandidateDecision = {
   accepted: boolean;
@@ -22,6 +26,53 @@ export function captureResolutionScale(widthPx: number, heightPx: number): numbe
   const longEdge = Math.max(widthPx, heightPx);
   if (!Number.isFinite(longEdge) || longEdge <= 0) return 1;
   return Math.max(0.1, Math.min(1, SCREEN_LONG_EDGE_PX / longEdge));
+}
+
+/**
+ * Delay before the requester's next MEDIA_KEYFRAME_REQUEST while it has a track but no decoded frame.
+ *
+ * This is the *keyframe* recovery clock only. It never escalates to an ICE restart: after the bounded
+ * first-frame retries it degrades to a steady retry so the decoder can still receive a fresh intra-frame.
+ * A missing first frame must not be reclassified as broken ICE/transport.
+ */
+export function keyframeRetryDelayMs(attempt: number): number {
+  if (!Number.isInteger(attempt) || attempt < 0) attempt = 0;
+  if (attempt < MEDIA_KEYFRAME_REQUEST_DELAYS_MS.length) return MEDIA_KEYFRAME_REQUEST_DELAYS_MS[attempt]!;
+  return MEDIA_KEYFRAME_STEADY_RETRY_MS;
+}
+
+export type SenderBitratePatch = {
+  encodings: Array<Record<string, unknown>>;
+  degradationPreference: 'maintain-resolution';
+  applicable: boolean;
+};
+
+/**
+ * Builds the sender parameter patch that encodes Chirp's high-quality LAN screen-share profile.
+ *
+ * It intentionally returns `applicable: false` when the sender reports no encodings yet. Fabricating a
+ * `[{}]` encoding here would desynchronize the JS encodings array from the native libwebrtc encoding list
+ * (react-native-webrtc rejects setParameters when the arrays differ in size), which would abort the share.
+ * In that case the caller should leave bitrate unconfigured (a quality preference, never session-fatal).
+ */
+export function senderBitrateParameters(
+  encodings: ReadonlyArray<Record<string, unknown>> | null | undefined,
+): SenderBitratePatch {
+  if (!Array.isArray(encodings) || encodings.length === 0) {
+    return { encodings: [], degradationPreference: 'maintain-resolution', applicable: false };
+  }
+  return {
+    encodings: encodings.map((encoding) => ({
+      ...(encoding && typeof encoding === 'object' ? encoding : {}),
+      minBitrate: SCREEN_MIN_BITRATE_BPS,
+      maxBitrate: SCREEN_MAX_BITRATE_BPS,
+      maxFramerate: SCREEN_FPS,
+      scaleResolutionDownBy: 1,
+      active: true,
+    })),
+    degradationPreference: 'maintain-resolution',
+    applicable: true,
+  };
 }
 
 export function isPrivateIpv4(address: string): boolean {
