@@ -534,6 +534,9 @@ export class MediaSessionController {
     this.mediaPhase = 'terminal_media_error';
     this.setState({ type: 'error', message });
     await this.record('media_failed');
+    // Media failure owns the product-session terminal transition. Await it before returning so queued
+    // native events cannot observe a still-Connected session and restart recovery after media_failed.
+    await this.session.mediaFailed(expectedSessionId).catch(() => undefined);
   }
   private activeSessionId(): string | null { return this.state.type === 'negotiating' || this.state.type === 'publishing' || this.state.type === 'remote_track_attached' || this.state.type === 'live' || this.state.type === 'reconnecting' ? this.state.sessionId : null; }
   private clearRecovery(resetAttempt: boolean): void { this.recoveryTimer?.cancel(); this.recoveryTimer = null; if (resetAttempt) this.recoveryAttempt = 0; }
