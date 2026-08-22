@@ -26,6 +26,30 @@ test('diagnostics stay bounded', async () => {
   assert.equal((await repository.list()).length, MAX_DIAGNOSTIC_EVENTS);
 });
 
+test('concurrent first appends share one load and retain both events', async () => {
+  let releaseRead: (() => void) | null = null;
+  const gate = new Promise<void>((resolve) => { releaseRead = resolve; });
+  class DelayedStore extends MemoryStore {
+    reads = 0;
+    override async getString(key: string) {
+      this.reads += 1;
+      await gate;
+      return super.getString(key);
+    }
+  }
+
+  const store = new DelayedStore();
+  const repository = new DiagnosticsRepository(store, { nowIso: () => '2026-08-18T00:00:01.000Z' });
+  const appStarted = repository.append('app_started');
+  const identityLoaded = repository.append('identity_loaded');
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(store.reads, 1);
+  releaseRead?.();
+  await Promise.all([appStarted, identityLoaded]);
+
+  assert.deepEqual((await repository.list()).map((event) => event.kind), ['app_started', 'identity_loaded']);
+});
+
 test('diagnostics reject persisted events with unknown fields', async () => {
   const store = new MemoryStore();
   store.values.set(DIAGNOSTICS_STORAGE_KEY, JSON.stringify([{
