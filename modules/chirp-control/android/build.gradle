@@ -3,11 +3,11 @@ plugins {
   id 'expo-module-gradle-plugin'
 }
 
-group = 'com.partnerscreen.control'
+group = 'com.chirp.control'
 version = '0.1.0'
 
 android {
-  namespace "com.partnerscreen.control"
+  namespace "com.chirp.control"
   defaultConfig {
     versionCode 1
     versionName "0.1.0"

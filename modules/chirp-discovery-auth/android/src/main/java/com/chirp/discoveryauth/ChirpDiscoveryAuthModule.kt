@@ -1,4 +1,4 @@
-package com.partnerscreen.discoveryauth
+package com.chirp.discoveryauth
 
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -13,12 +13,12 @@ private const val MAX_MESSAGE_BYTES = 512
 private val KEY_RE = Regex("^[0-9a-f]{64}$")
 private val HEX = "0123456789abcdef".toCharArray()
 
-class PartnerDiscoveryAuthModule : Module() {
+class ChirpDiscoveryAuthModule : Module() {
   @Volatile private var selfTestPassed = false
   private val selfTestLock = Any()
 
   override fun definition() = ModuleDefinition {
-    Name("PartnerDiscoveryAuth")
+    Name("ChirpDiscoveryAuth")
 
     AsyncFunction("hmacSha256") { keyHex: String, message: String ->
       ensureSelfTest()

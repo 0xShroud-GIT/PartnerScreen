@@ -1,4 +1,4 @@
-package com.partnerscreen.control
+package com.chirp.control
 
 import android.content.Context
 import android.net.ConnectivityManager
@@ -35,7 +35,7 @@ private data class WifiEndpoint(val network: Network, val address: Inet4Address)
 private data class ListenerHandle(val socket: ServerSocket, val host: String)
 private data class ConnectionHandle(val socket: Socket, val writeLock: Any = Any())
 
-class PartnerControlModule : Module() {
+class ChirpControlModule : Module() {
   companion object {
     private val listeners = ConcurrentHashMap<String, ListenerHandle>()
     private val connections = ConcurrentHashMap<String, ConnectionHandle>()
@@ -78,24 +78,24 @@ class PartnerControlModule : Module() {
   }
 
   override fun definition() = ModuleDefinition {
-    Name("PartnerControl")
-    Events("onPartnerControlEvent")
+    Name("ChirpControl")
+    Events("onChirpControlEvent")
 
     OnCreate {
-      attachSink { event -> sendEvent("onPartnerControlEvent", event) }
+      attachSink { event -> sendEvent("onChirpControlEvent", event) }
     }
 
     AsyncFunction("startTrustedPresence") {
       presenceRequired = true
       val context = appContext.reactContext?.applicationContext ?: throw IllegalStateException("Android context is unavailable.")
-      PartnerTrustedPresenceService.start(context)
+      ChirpTrustedPresenceService.start(context)
       true
     }
 
     AsyncFunction("stopTrustedPresence") {
       presenceRequired = false
       val context = appContext.reactContext?.applicationContext
-      if (context != null) PartnerTrustedPresenceService.stop(context)
+      if (context != null) ChirpTrustedPresenceService.stop(context)
       true
     }
 
@@ -142,7 +142,6 @@ class PartnerControlModule : Module() {
       val bytes = frame.toByteArray(StandardCharsets.UTF_8)
       require(bytes.isNotEmpty() && bytes.size <= MAX_FRAME_BYTES) { "Control frame size is invalid." }
       val handle = connections[connectionId] ?: throw IllegalStateException("Control connection is not active.")
-      // executor.submit is the bounded write path; IO pool is separate from accept.
       val write = ioExecutor.submit {
         synchronized(handle.writeLock) {
           val output = DataOutputStream(handle.socket.getOutputStream())
@@ -184,10 +183,8 @@ class PartnerControlModule : Module() {
         val socket = server.accept()
         socket.tcpNoDelay = true
         socket.keepAlive = true
-        // Classify off the accept thread so a slow first-frame wait cannot block further accepts.
         ioExecutor.execute { classifyInbound(listenerId, socket) }
       } catch (_: Exception) {
-        // Listener-scoped failure: emit listenerId, never stuff the listener UUID into connectionId.
         if (!server.isClosed && listeners.containsKey(listenerId)) emitListenerError("listener_failed", listenerId)
         break
       }
@@ -197,8 +194,6 @@ class PartnerControlModule : Module() {
   }
 
   private fun classifyInbound(listenerId: String, socket: Socket) {
-    // Reachability probes connect to the exact control port and close without a handshake frame.
-    // Those must never occupy the authenticated connection slot or emit a fake inbound session.
     val firstFrame: ByteArray? = try {
       socket.soTimeout = INBOUND_CLASSIFY_TIMEOUT_MS
       val input = DataInputStream(socket.getInputStream())
@@ -318,9 +313,6 @@ class PartnerControlModule : Module() {
     val active = connectivity.activeNetwork
     if (active != null) endpointFor(active)?.let { return it }
 
-    // Compatibility fallback: Android can keep cellular as the default network while a usable
-    // local Wi-Fi network is still connected. Control must use the same private-Wi-Fi selection
-    // behavior as pairing instead of incorrectly reporting the trusted partner offline.
     @Suppress("DEPRECATION")
     return connectivity.allNetworks
       .asSequence()

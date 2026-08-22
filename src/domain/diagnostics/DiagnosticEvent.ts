@@ -50,21 +50,8 @@ export type DiagnosticEventKind =
   | 'media_reconnected'
   | 'media_failed'
   | 'media_stats'
-  | 'activity_started'
-  | 'activity_resumed'
-  | 'activity_paused'
-  | 'activity_stopped'
-  | 'activity_destroyed'
-  | 'app_backgrounded'
-  | 'app_foregrounded'
-  | 'viewer_opened'
-  | 'viewer_closed'
-  | 'pip_entered'
-  | 'pip_exited'
   | 'notification_shown'
-  | 'notification_cleared'
-  | 'keep_awake_enabled'
-  | 'keep_awake_disabled';
+  | 'notification_cleared';
 
 export interface DiagnosticEvent {
   schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION;
@@ -86,10 +73,7 @@ const VALID_KINDS = new Set<DiagnosticEventKind>([
   'capture_consent_denied', 'capture_started', 'capture_stopped', 'capture_revoked',
   'capture_failed', 'media_negotiation_started', 'media_remote_track', 'media_first_frame',
   'media_degraded', 'media_reconnect_attempt', 'media_reconnected', 'media_failed',
-  'media_stats',
-  'activity_started', 'activity_resumed', 'activity_paused', 'activity_stopped', 'activity_destroyed',
-  'app_backgrounded', 'app_foregrounded', 'viewer_opened', 'viewer_closed', 'pip_entered', 'pip_exited',
-  'notification_shown', 'notification_cleared', 'keep_awake_enabled', 'keep_awake_disabled',
+  'media_stats', 'notification_shown', 'notification_cleared',
 ]);
 
 export function isDiagnosticEvent(value: unknown): value is DiagnosticEvent {

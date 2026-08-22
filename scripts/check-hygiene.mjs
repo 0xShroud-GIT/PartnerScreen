@@ -16,6 +16,7 @@ for (const file of tracked) {
   if (/partnerscreen/i.test(text) || /partnerscreen/i.test(file)) fail(`legacy product branding remains in ${file}`);
   if (/org\.jitsi:webrtc|WebRtcEngine|PartnerRemoteVideoView|ScreenCaptureCoordinator|MediaSessionController|ExpoWebRtcMedia/.test(text + file)) fail(`deleted custom WebRTC architecture remains in ${file}`);
   if (/armeabi-v7a/.test(text) || /['"]x86['"]/.test(text)) fail(`32-bit ABI remains in ${file}`);
+  if (/^tsconfig\.m\d+-tests\.json$/.test(file)) fail(`historical milestone test config remains: ${file}`);
 }
 
 const forbiddenPaths = [
@@ -23,6 +24,7 @@ const forbiddenPaths = [
   'modules/partner-screen-capture', 'modules/partner-keep-awake', 'modules/partner-lifecycle',
   'modules/partner-runtime-lab', 'modules/partner-pip', 'src/capture', 'src/platform/capture',
   'src/platform/media', 'src/platform/keepawake', 'src/platform/lifecycle', 'src/platform/pip',
+  'src/platform/discovery/ExpoPartnerDiscovery.ts',
 ];
 for (const target of forbiddenPaths) if (exists(target)) fail(`forbidden path exists: ${target}`);
 
@@ -34,6 +36,16 @@ const pkg = JSON.parse(read('package.json'));
 if (pkg.name !== 'chirp') fail('package name must be chirp');
 if (pkg.dependencies?.['react-native-webrtc'] !== '124.0.8') fail('react-native-webrtc must be pinned to 124.0.8');
 if ('react-dom' in (pkg.dependencies ?? {}) || 'react-native-web' in (pkg.dependencies ?? {}) || 'expo-dev-client' in (pkg.dependencies ?? {})) fail('web/dev-client dependencies are not allowed');
+
+const lock = JSON.parse(read('package-lock.json'));
+const lockRoot = lock.packages?.[''];
+if (lock.name !== pkg.name || lock.version !== pkg.version || lockRoot?.name !== pkg.name || lockRoot?.version !== pkg.version) fail('package-lock root metadata must match package.json');
+for (const [name, version] of Object.entries(pkg.dependencies ?? {})) {
+  if (lockRoot?.dependencies?.[name] !== version) fail(`package-lock is missing direct dependency ${name}@${version}`);
+}
+for (const name of Object.keys(lockRoot?.dependencies ?? {})) {
+  if (!(name in (pkg.dependencies ?? {}))) fail(`package-lock has stale direct dependency ${name}`);
+}
 
 const config = read('app.config.ts');
 for (const required of ["name: 'Chirp'", "package: 'com.chirp.app'", "'arm64-v8a'", "'x86_64'", "'@config-plugins/react-native-webrtc'"]) {

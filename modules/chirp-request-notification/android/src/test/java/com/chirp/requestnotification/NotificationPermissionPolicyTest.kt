@@ -1,4 +1,4 @@
-package com.partnerscreen.requestnotification
+package com.chirp.requestnotification
 
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
@@ -11,7 +11,7 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 class NotificationPermissionPolicyTest {
-  private val channelId = "partnerscreen_incoming_request"
+  private val channelId = "chirp_incoming_request"
 
   @Test
   @Config(sdk = [31, 32])

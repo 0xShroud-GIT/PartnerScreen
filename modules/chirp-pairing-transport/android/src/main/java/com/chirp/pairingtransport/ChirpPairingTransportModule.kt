@@ -1,4 +1,4 @@
-package com.partnerscreen.pairingtransport
+package com.chirp.pairingtransport
 
 import android.content.Context
 import android.net.ConnectivityManager
@@ -45,15 +45,14 @@ private data class ConnectionHandle(
   val writeLock: Any = Any(),
 )
 
-class PartnerPairingTransportModule : Module() {
+class ChirpPairingTransportModule : Module() {
   private val listeners = ConcurrentHashMap<String, ListenerHandle>()
   private val connections = ConcurrentHashMap<String, ConnectionHandle>()
   private val connectionLock = Any()
   private val executor: ExecutorService = Executors.newFixedThreadPool(TRANSPORT_WORKERS)
 
   override fun definition() = ModuleDefinition {
-    Name("PartnerPairingTransport")
-
+    Name("ChirpPairingTransport")
     Events("onPairingTransportEvent")
 
     AsyncFunction("startListener") {
@@ -309,10 +308,6 @@ class PartnerPairingTransportModule : Module() {
       endpointFor(active)?.let { return it }
     }
 
-    // Compatibility fallback: pairing may need a connected local Wi-Fi network even when
-    // cellular is the default network. getAllNetworks() is deprecated from API 31; replacing
-    // this synchronous one-shot fallback requires lifecycle-owned NetworkCallback tracking and
-    // is explicitly recorded in the M9 API audit rather than silently changing M2 behavior.
     @Suppress("DEPRECATION")
     return connectivity.allNetworks
       .asSequence()
@@ -320,9 +315,8 @@ class PartnerPairingTransportModule : Module() {
       .firstOrNull()
   }
 
-  private fun hasRouteTo(linkProperties: LinkProperties, destination: Inet4Address): Boolean {
-    return linkProperties.routes.any { route -> route.matches(destination) }
-  }
+  private fun hasRouteTo(linkProperties: LinkProperties, destination: Inet4Address): Boolean =
+    linkProperties.routes.any { route -> route.matches(destination) }
 
   private fun parsePrivateIpv4(host: String): Inet4Address? {
     if (!host.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}$"))) return null

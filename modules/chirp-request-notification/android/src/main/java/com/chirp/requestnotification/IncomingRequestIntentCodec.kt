@@ -1,4 +1,4 @@
-package com.partnerscreen.requestnotification
+package com.chirp.requestnotification
 
 import android.content.Context
 import android.content.Intent
@@ -6,10 +6,10 @@ import android.net.Uri
 
 /** Production notification intent codec shared directly with Robolectric tests. */
 internal object IncomingRequestIntentCodec {
-  const val EXTRA_KIND = "partnerscreen_notification"
-  const val EXTRA_SESSION_ID = "partnerscreen_sessionId"
+  const val EXTRA_KIND = "chirp_notification"
+  const val EXTRA_SESSION_ID = "chirp_sessionId"
   const val KIND_INCOMING_REQUEST = "incoming_request"
-  private const val SCHEME = "partnerscreen"
+  private const val SCHEME = "chirp"
   private const val HOST = "incoming-request"
   private val SESSION_ID_RE = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", RegexOption.IGNORE_CASE)
 

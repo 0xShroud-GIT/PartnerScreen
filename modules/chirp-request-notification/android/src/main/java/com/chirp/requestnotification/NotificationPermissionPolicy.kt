@@ -1,4 +1,4 @@
-package com.partnerscreen.requestnotification
+package com.chirp.requestnotification
 
 import android.app.NotificationManager
 import android.content.Context

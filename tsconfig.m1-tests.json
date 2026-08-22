@@ -1,8 +1,0 @@
-{
-  "extends": "./tsconfig.tests.json",
-  "include": [],
-  "files": [
-    "tests/identity.test.ts",
-    "tests/diagnostics.test.ts"
-  ]
-}

@@ -3,11 +3,11 @@ plugins {
   id 'expo-module-gradle-plugin'
 }
 
-group = 'com.partnerscreen.discoveryauth'
+group = 'com.chirp.discoveryauth'
 version = '0.1.0'
 
 android {
-  namespace "com.partnerscreen.discoveryauth"
+  namespace "com.chirp.discoveryauth"
   defaultConfig {
     versionCode 1
     versionName "0.1.0"

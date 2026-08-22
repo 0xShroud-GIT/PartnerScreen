@@ -1,4 +1,4 @@
-package com.partnerscreen.discovery
+package com.chirp.discovery
 
 import android.content.Context
 import android.net.ConnectivityManager
@@ -24,7 +24,7 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-private const val SERVICE_TYPE = "_partnerscreen._tcp."
+private const val SERVICE_TYPE = "_chirp._tcp."
 private const val PROTOCOL_VERSION = "1"
 private const val START_TIMEOUT_SECONDS = 8L
 private const val PROBE_TIMEOUT_MS = 3_000
@@ -52,7 +52,7 @@ private data class PendingStart(
   val settled: AtomicBoolean = AtomicBoolean(false),
 )
 
-class PartnerDiscoveryModule : Module() {
+class ChirpDiscoveryModule : Module() {
   private val callbackExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(2)
   private val acceptExecutor = Executors.newSingleThreadExecutor()
   private val stateLock = Any()
@@ -66,9 +66,8 @@ class PartnerDiscoveryModule : Module() {
   private val serviceInfoCallbacks = HashMap<String, NsdManager.ServiceInfoCallback>()
 
   override fun definition() = ModuleDefinition {
-    Name("PartnerDiscovery")
-
-    Events("onPartnerDiscoveryEvent")
+    Name("ChirpDiscovery")
+    Events("onChirpDiscoveryEvent")
 
     AsyncFunction("prepareAdvertisement") {
       synchronized(stateLock) {
@@ -179,7 +178,7 @@ class PartnerDiscoveryModule : Module() {
       }
 
       val serviceInfo = NsdServiceInfo().apply {
-        serviceName = "PartnerScreen-${item.nonce.take(10)}"
+        serviceName = "Chirp-${item.nonce.take(10)}"
         serviceType = SERVICE_TYPE
         port = item.socket.localPort
         setAttribute("v", PROTOCOL_VERSION)
@@ -282,7 +281,7 @@ class PartnerDiscoveryModule : Module() {
         if (!isCurrent(item.generation)) return
         if (serviceInfo.serviceName == registeredServiceName) return
         sendEvent(
-          "onPartnerDiscoveryEvent",
+          "onChirpDiscoveryEvent",
           mapOf("type" to "service_lost", "serviceName" to serviceInfo.serviceName),
         )
       }
@@ -307,8 +306,6 @@ class PartnerDiscoveryModule : Module() {
   }
 
   private fun resolveService(manager: NsdManager, item: PreparedAdvertisement, serviceInfo: NsdServiceInfo) {
-    // API 34+: resolveService is deprecated because the snapshot can go stale immediately.
-    // registerServiceInfoCallback keeps this one discovered service continuously updated.
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
       watchServiceInfo(manager, item, serviceInfo)
       return
@@ -336,7 +333,7 @@ class PartnerDiscoveryModule : Module() {
         if (!isCurrent(item.generation)) return
         if (key == registeredServiceName) return
         sendEvent(
-          "onPartnerDiscoveryEvent",
+          "onChirpDiscoveryEvent",
           mapOf("type" to "service_lost", "serviceName" to key),
         )
       }
@@ -362,9 +359,7 @@ class PartnerDiscoveryModule : Module() {
 
   private fun resolveServiceLegacy(manager: NsdManager, item: PreparedAdvertisement, serviceInfo: NsdServiceInfo) {
     val listener = object : NsdManager.ResolveListener {
-      override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-        // The LAN is untrusted and unrelated/broken services are expected. Ignore individual failures.
-      }
+      override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = Unit
 
       override fun onServiceResolved(resolved: NsdServiceInfo) {
         emitResolvedIfTrusted(item, resolved)
@@ -399,7 +394,7 @@ class PartnerDiscoveryModule : Module() {
     if (resolved.port !in 1..65535) return
 
     sendEvent(
-      "onPartnerDiscoveryEvent",
+      "onChirpDiscoveryEvent",
       mapOf(
         "type" to "service_resolved",
         "service" to mapOf(
@@ -498,6 +493,11 @@ class PartnerDiscoveryModule : Module() {
     if (manager != null && registration != null) {
       try { manager.unregisterService(registration) } catch (_: Exception) { /* best effort */ }
     }
+    if (manager != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      for (callback in watchers) {
+        try { manager.unregisterServiceInfoCallback(callback) } catch (_: Exception) { /* best effort */ }
+      }
+    }
     try { socket?.close() } catch (_: Exception) { /* best effort */ }
     try { if (lock?.isHeld == true) lock.release() } catch (_: Exception) { /* best effort */ }
   }
@@ -509,7 +509,7 @@ class PartnerDiscoveryModule : Module() {
       ?: throw IllegalStateException("Wi-Fi service is unavailable.")
     synchronized(stateLock) {
       if (multicastLock?.isHeld != true) {
-        multicastLock = wifi.createMulticastLock("PartnerScreenDiscovery").apply {
+        multicastLock = wifi.createMulticastLock("ChirpDiscovery").apply {
           setReferenceCounted(false)
           acquire()
         }
@@ -547,9 +547,6 @@ class PartnerDiscoveryModule : Module() {
     val active = connectivity.activeNetwork
     if (active != null) endpointFor(active)?.let { return it }
 
-    // Compatibility fallback: Android can keep cellular as the default network while a usable
-    // private Wi-Fi network remains connected. Discovery must follow the same private-Wi-Fi
-    // selection behavior as pairing and control so availability does not fail spuriously.
     @Suppress("DEPRECATION")
     return connectivity.allNetworks
       .asSequence()

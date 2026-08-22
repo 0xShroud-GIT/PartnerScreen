@@ -1,4 +1,4 @@
-package com.partnerscreen.requestnotification
+package com.chirp.requestnotification
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,9 +9,9 @@ import androidx.core.app.NotificationCompat
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
-class PartnerRequestNotificationModule : Module() {
+class ChirpRequestNotificationModule : Module() {
   companion object {
-    private const val CHANNEL_ID = "partnerscreen_incoming_request"
+    private const val CHANNEL_ID = "chirp_incoming_request"
     private const val NOTIFICATION_ID = 7306
     const val EXTRA_KIND = IncomingRequestIntentCodec.EXTRA_KIND
     const val EXTRA_SESSION_ID = IncomingRequestIntentCodec.EXTRA_SESSION_ID
@@ -19,7 +19,7 @@ class PartnerRequestNotificationModule : Module() {
   }
 
   override fun definition() = ModuleDefinition {
-    Name("PartnerRequestNotification")
+    Name("ChirpRequestNotification")
     Events("onIncomingRequestOpened")
 
     AsyncFunction("showRequestNotification") { sessionId: String, partnerName: String ->
@@ -37,11 +37,15 @@ class PartnerRequestNotificationModule : Module() {
         context,
         sessionId.hashCode(),
         launchIntent,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
       val sanitizedName = partnerName.take(40).replace(Regex("[^\\p{Print}]"), "")
-      val title = "PartnerScreen — Screen request"
-      val text = if (sanitizedName.isNotBlank()) "Trusted partner $sanitizedName is requesting your screen." else "Trusted partner is requesting your screen."
+      val title = "Chirp — Screen request"
+      val text = if (sanitizedName.isNotBlank()) {
+        "Trusted partner $sanitizedName is requesting your screen."
+      } else {
+        "Trusted partner is requesting your screen."
+      }
       val notification = NotificationCompat.Builder(context, CHANNEL_ID)
         .setSmallIcon(android.R.drawable.ic_menu_view)
         .setContentTitle(title)
@@ -98,7 +102,11 @@ class PartnerRequestNotificationModule : Module() {
     val manager = context.getSystemService(NotificationManager::class.java) ?: return
     val existing = manager.getNotificationChannel(CHANNEL_ID)
     if (existing != null) return
-    val channel = NotificationChannel(CHANNEL_ID, "Incoming screen requests", NotificationManager.IMPORTANCE_HIGH).apply {
+    val channel = NotificationChannel(
+      CHANNEL_ID,
+      "Incoming screen requests",
+      NotificationManager.IMPORTANCE_HIGH,
+    ).apply {
       description = "Shows when your trusted partner requests your screen, even while the app is backgrounded."
       setShowBadge(false)
       enableVibration(true)

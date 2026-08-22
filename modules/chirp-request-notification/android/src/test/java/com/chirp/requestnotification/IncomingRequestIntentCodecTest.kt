@@ -1,4 +1,4 @@
-package com.partnerscreen.requestnotification
+package com.chirp.requestnotification
 
 import android.content.Context
 import android.content.Intent
@@ -24,7 +24,7 @@ class IncomingRequestIntentCodecTest {
 
     assertEquals(Intent.ACTION_VIEW, intent.action)
     assertEquals(context.packageName, intent.`package`)
-    assertEquals("partnerscreen://incoming-request/$sessionA", intent.dataString)
+    assertEquals("chirp://incoming-request/$sessionA", intent.dataString)
     assertEquals(IncomingRequestIntentCodec.KIND_INCOMING_REQUEST, intent.getStringExtra(IncomingRequestIntentCodec.EXTRA_KIND))
     assertEquals(sessionA, intent.getStringExtra(IncomingRequestIntentCodec.EXTRA_SESSION_ID))
     assertTrue(intent.flags and Intent.FLAG_ACTIVITY_SINGLE_TOP != 0)
@@ -48,9 +48,9 @@ class IncomingRequestIntentCodecTest {
 
   @Test
   fun malformedOrSecretBearingRoutesAreRejected() {
-    assertNull(IncomingRequestIntentCodec.parse("partnerscreen://incoming-request/not-a-uuid"))
+    assertNull(IncomingRequestIntentCodec.parse("chirp://incoming-request/not-a-uuid"))
     assertNull(IncomingRequestIntentCodec.parse("https://example.com/incoming-request/$sessionA"))
-    assertNull(IncomingRequestIntentCodec.parse("partnerscreen://incoming-request/$sessionA/192.168.1.20"))
-    assertNull(IncomingRequestIntentCodec.take(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("partnerscreen://incoming-request/not-a-uuid"))))
+    assertNull(IncomingRequestIntentCodec.parse("chirp://incoming-request/$sessionA/192.168.1.20"))
+    assertNull(IncomingRequestIntentCodec.take(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("chirp://incoming-request/not-a-uuid"))))
   }
 }
