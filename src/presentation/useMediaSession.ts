@@ -1,37 +1,27 @@
 import { useSyncExternalStore } from 'react';
 import { appServices } from '../application/AppServices';
 
-let cachedPresentation: ReturnType<typeof readPresentation> | null = null;
-function readPresentation() {
+let cached: ReturnType<typeof read> | null = null;
+function read() {
   return {
-    state: appServices.mediaSessionController.getSnapshot(),
-    stats: appServices.mediaSessionController.getStatsSnapshot(),
-    health: appServices.mediaSessionController.getLiveHealth(),
-    transport: appServices.mediaSessionController.getTransportSnapshot(),
+    state: appServices.mediaSession.getSnapshot(),
+    stats: appServices.mediaSession.getStatsSnapshot(),
+    remoteStreamURL: appServices.mediaSession.getRemoteStreamURL(),
   };
 }
-function getPresentationSnapshot() {
-  const next = readPresentation();
-  if (
-    cachedPresentation
-    && cachedPresentation.state === next.state
-    && cachedPresentation.stats === next.stats
-    && cachedPresentation.health === next.health
-    && cachedPresentation.transport === next.transport
-  ) return cachedPresentation;
-  cachedPresentation = next;
-  return cachedPresentation;
+function snapshot() {
+  const next = read();
+  if (cached && cached.state === next.state && cached.stats === next.stats && cached.remoteStreamURL === next.remoteStreamURL) return cached;
+  cached = next;
+  return next;
 }
 
 export function useMediaSession() {
-  const snapshot = useSyncExternalStore(appServices.mediaSessionController.subscribe, getPresentationSnapshot, getPresentationSnapshot);
+  const value = useSyncExternalStore(appServices.mediaSession.subscribe, snapshot, snapshot);
   return {
-    state: snapshot.state,
-    stats: snapshot.stats,
-    health: snapshot.health,
-    transport: snapshot.transport,
-    rendererFirstFrame: (sessionId: string, rendererEpoch: number) => appServices.mediaSessionController.rendererFirstFrame(sessionId, rendererEpoch),
-    reconcile: () => appServices.mediaSessionController.reconcile(),
-    clearError: () => appServices.mediaSessionController.clearError(),
+    ...value,
+    startSharing: () => appServices.mediaSession.startSharing(),
+    stop: () => appServices.mediaSession.stop(),
+    reconcile: () => appServices.mediaSession.reconcile(),
   };
 }

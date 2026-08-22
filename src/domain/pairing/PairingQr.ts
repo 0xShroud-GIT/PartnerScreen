@@ -62,7 +62,7 @@ export function parsePairingQr(
     throw new PairingQrError('The pairing QR code is too large.');
   }
   if (!raw.startsWith(PAIRING_QR_PREFIX)) {
-    throw new PairingQrError('This is not a PartnerScreen pairing QR code.');
+    throw new PairingQrError('This is not a Chirp pairing QR code.');
   }
 
   let parsed: unknown;
@@ -108,7 +108,7 @@ export function validatePairingQrObject(value: unknown): PairingQrPayload {
     throw new PairingQrError('The pairing QR contains unsupported fields.');
   }
   if (item.protocolVersion !== PAIRING_PROTOCOL_VERSION) {
-    throw new PairingQrError('This PartnerScreen pairing version is not supported.');
+    throw new PairingQrError('This Chirp pairing version is not supported.');
   }
   if (typeof item.pairAttemptId !== 'string' || !UUID_RE.test(item.pairAttemptId)) {
     throw new PairingQrError('The pairing attempt ID is invalid.');

@@ -11,7 +11,7 @@ import { decodePairingSealedWire, encodePairingSealedWire } from '../src/domain/
 import { buildPairingQrPayload } from '../src/domain/pairing/PairingQr';
 import { PairingService } from '../src/application/PairingService';
 import type { PairingTransport } from '../src/platform/pairing/ExpoPairingTransport';
-import type { PairingListenerEndpoint, PairingTransportEvent } from '../modules/partner-pairing-transport';
+import type { PairingListenerEndpoint, PairingTransportEvent } from '../modules/chirp-pairing-transport';
 
 class MemoryStore implements KeyValueStore {
   readonly values = new Map<string, string>();

@@ -43,20 +43,20 @@ export default function CreatePairScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
       <Text accessibilityRole="header" style={styles.title}>Pair this phone</Text>
       <Text style={styles.help}>Keep both phones on the same Wi-Fi. The QR is temporary and does not pair the phones by itself.</Text>
 
-      {pairing.state.kind === 'loading' ? <ActivityIndicator /> : null}
+      {pairing.state.kind === 'loading' ? <ActivityIndicator color="#ffffff" /> : null}
 
       {pairing.state.kind === 'creator_qr' ? (
         <View style={styles.card}>
           <Text style={styles.label}>Scan this QR on the other phone</Text>
-          <View style={styles.qrBox} accessibilityLabel="Temporary PartnerScreen pairing QR code">
+          <View style={styles.qrBox} accessibilityLabel="Temporary Chirp pairing QR code">
             <QRCode value={pairing.state.qrPayload} size={240} quietZone={8} />
           </View>
-          <Text style={styles.help}>Expires in {secondsLeft ?? '…'} seconds. A fresh one-time credential is inside the QR and is never saved as partner trust.</Text>
-          <ActivityIndicator />
+          <Text style={styles.help}>Expires in {secondsLeft ?? '…'} seconds. The one-time credential inside this QR is not saved as partner trust.</Text>
+          <ActivityIndicator color="#ffffff" />
           <Text style={styles.status}>Waiting for the other phone…</Text>
         </View>
       ) : null}
@@ -64,7 +64,7 @@ export default function CreatePairScreen() {
       {pairing.state.kind === 'waiting_partner' && pairing.state.role === 'creator' ? (
         <View style={styles.card}>
           <Text style={styles.label}>{pairing.state.peer ? 'Authenticated phone' : 'Connecting…'}</Text>
-          {pairing.state.peer ? <Peer peer={pairing.state.peer} /> : <ActivityIndicator />}
+          {pairing.state.peer ? <Peer peer={pairing.state.peer} /> : <ActivityIndicator color="#ffffff" />}
           <Text style={styles.help}>{pairing.state.message}</Text>
         </View>
       ) : null}
@@ -73,7 +73,7 @@ export default function CreatePairScreen() {
         <View style={styles.card}>
           <Text style={styles.label}>The other phone confirmed you</Text>
           <Peer peer={pairing.state.peer} />
-          <Text style={styles.help}>Check the name on the other phone. Only confirm if this is the person/device you expect.</Text>
+          <Text style={styles.help}>Check the name on the other phone. Confirm only if this is the device you expect.</Text>
           <Pressable accessibilityRole="button" onPress={() => { void pairing.confirmPartner().catch(() => undefined); }} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
             <Text style={styles.primaryText}>Confirm trusted partner</Text>
           </Pressable>
@@ -82,9 +82,9 @@ export default function CreatePairScreen() {
 
       {pairing.state.kind === 'finalizing' && pairing.state.role === 'creator' ? (
         <View style={styles.card}>
-          <ActivityIndicator />
+          <ActivityIndicator color="#ffffff" />
           <Text style={styles.label}>Saving trust on both phones…</Text>
-          <Text style={styles.help}>Do not leave this screen until both phones say pairing completed.</Text>
+          <Text style={styles.help}>Keep both phones in Chirp until pairing finishes.</Text>
         </View>
       ) : null}
 
@@ -114,22 +114,23 @@ function Peer({ peer }: { peer: { deviceName: string; deviceId: string } }) {
 }
 
 const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: '#0b0d10' },
   container: { flexGrow: 1, gap: 18, padding: 24, paddingBottom: 40 },
-  title: { fontSize: 28, fontWeight: '800' },
-  help: { fontSize: 14, lineHeight: 20, opacity: 0.75 },
-  card: { alignItems: 'stretch', borderWidth: 1, borderColor: '#999', borderRadius: 14, gap: 14, padding: 16 },
-  label: { fontSize: 17, fontWeight: '700', textAlign: 'center' },
-  qrBox: { alignSelf: 'center', backgroundColor: '#fff', padding: 8 },
-  status: { textAlign: 'center', fontWeight: '600' },
+  title: { color: '#ffffff', fontSize: 28, fontWeight: '800' },
+  help: { color: '#b8c0cb', fontSize: 14, lineHeight: 20 },
+  card: { alignItems: 'stretch', backgroundColor: '#15191f', borderWidth: StyleSheet.hairlineWidth, borderColor: '#303741', borderRadius: 16, gap: 14, padding: 16 },
+  label: { color: '#ffffff', fontSize: 17, fontWeight: '700', textAlign: 'center' },
+  qrBox: { alignSelf: 'center', backgroundColor: '#ffffff', borderRadius: 12, padding: 8 },
+  status: { color: '#d9dee5', textAlign: 'center', fontWeight: '600' },
   peer: { gap: 4, alignItems: 'center' },
-  peerName: { fontSize: 24, fontWeight: '800' },
-  peerId: { fontFamily: 'monospace', opacity: 0.72 },
-  primary: { alignItems: 'center', backgroundColor: '#111', borderRadius: 10, padding: 14 },
-  primaryText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  cancel: { alignItems: 'center', borderWidth: 1, borderColor: '#a00', borderRadius: 10, padding: 13 },
-  cancelText: { color: '#a00', fontWeight: '700' },
-  pressed: { opacity: 0.7 },
-  errorBox: { borderWidth: 1, borderColor: '#a00', borderRadius: 10, gap: 10, padding: 12 },
-  error: { color: '#a00' },
-  link: { fontWeight: '700', textDecorationLine: 'underline' },
+  peerName: { color: '#ffffff', fontSize: 24, fontWeight: '800' },
+  peerId: { color: '#9da7b4', fontFamily: 'monospace' },
+  primary: { minHeight: 50, alignItems: 'center', justifyContent: 'center', backgroundColor: '#ffffff', borderRadius: 12, padding: 14 },
+  primaryText: { color: '#0b0d10', fontSize: 16, fontWeight: '700' },
+  cancel: { minHeight: 48, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#754044', backgroundColor: '#241517', borderRadius: 12, padding: 13 },
+  cancelText: { color: '#ffb5ba', fontWeight: '700' },
+  pressed: { opacity: 0.65 },
+  errorBox: { borderWidth: 1, borderColor: '#754044', backgroundColor: '#241517', borderRadius: 12, gap: 10, padding: 14 },
+  error: { color: '#ffb5ba', lineHeight: 20 },
+  link: { color: '#ffffff', fontWeight: '700', textDecorationLine: 'underline' },
 });

@@ -25,7 +25,7 @@ function qr(overrides: Partial<Parameters<typeof buildPairingQrPayload>[0]> = {}
   });
 }
 
-test('valid PartnerScreen QR parses with one-time bootstrap material', () => {
+test('valid Chirp QR parses with one-time bootstrap material', () => {
   const parsed = parsePairingQr(qr(), { nowMs: NOW + 1_000, localDeviceId: B, alreadyPaired: false });
   assert.equal(parsed.creatorDeviceId, A);
   assert.equal(parsed.host, '192.168.1.15');

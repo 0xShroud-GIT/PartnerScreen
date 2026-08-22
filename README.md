@@ -1,94 +1,77 @@
-# PartnerScreen
+# Chirp
 
-PartnerScreen is an Android app for two trusted partners to pair once and, while on the same local network, request and explicitly approve live screen viewing.
+Chirp is an Android app for two trusted phones to pair once and privately share either phone's screen over the same local Wi-Fi network.
 
-The product is privacy-first: capture requires the owner's approval and Android MediaProjection consent, media is direct peer-to-peer WebRTC, and V1 has no accounts, cloud signaling, recording, remote control, analytics, ads, microphone sharing, or TURN relay.
+The product boundary is deliberately small:
 
-## Stack
+- explicit trusted-device pairing
+- authenticated local discovery and control
+- owner approval plus Android MediaProjection consent for every share
+- direct peer-to-peer WebRTC video over private LAN host candidates
+- no accounts, cloud signaling, TURN relay, recording, remote control, analytics, ads, or microphone capture
+
+## Runtime
 
 - Expo SDK 57
 - React Native 0.86.2 / React 19.2.3
 - TypeScript 6
+- `react-native-webrtc` 124.0.8
 - Expo Router
-- Local Kotlin Expo Modules for Android-owned capabilities
-- `org.jitsi:webrtc:124.0.0` inside the screen-capture native module
-- Android V1 only
+- five local Kotlin Expo modules for pairing, discovery, authenticated control, discovery authentication, and request notifications
+- Android only
+- 64-bit ABIs only: `arm64-v8a` for physical phones and `x86_64` for emulators
 
-PartnerScreen requires a custom development/production build. Expo Go is not a valid product runtime for the native discovery, transport, MediaProjection, or WebRTC capabilities used here.
+Screen capture and rendering are owned by `react-native-webrtc`: Chirp uses `getDisplayMedia()` and `RTCView` directly. Chirp does not maintain a custom PeerConnection engine, capturer, renderer, EGL layer, or MediaProjection implementation.
 
 ## Repository
 
 ```text
-PartnerScreen/
-├── README.md             # permanent human entry point
-├── AGENTS.md             # permanent AI/developer working rules
-├── CHECKPOINT.md         # current project state and next work
-├── app/                  # Expo Router routes/screens
-├── src/                  # TypeScript application/domain logic
-├── modules/              # PartnerScreen Kotlin Expo Modules
-├── tests/                # product/regression tests
-├── scripts/              # validation and Android build tooling
-├── docs/                 # focused durable architecture/reference docs
-├── app.config.ts
-├── package.json
-└── package-lock.json
+app/        Expo Router screens
+src/        pairing, discovery, product session, control, media, security, diagnostics
+modules/    five Android native modules that are specific to Chirp
+plugins/    minimal Expo config required by react-native-webrtc
+scripts/    repository hygiene and APK build commands
+tests/      TypeScript product/security/policy tests
 ```
 
-GitHub is the canonical working repository. Historical handoff packets, generated evidence bundles, APKs, keystores, `node_modules/`, and generated root `android/` / `ios/` projects do not belong in source control.
+Generated `android/`, APKs, keystores, `node_modules/`, historical milestone scaffolding, runtime laboratories, and generated evidence do not belong in source control.
 
-## Start development
+## Development
 
 Requirements:
 
 - Node `>=22.13.0 <23`
-- npm 10.x (`package.json` currently records `npm@10.9.8`)
+- npm 10.x
+- Android SDK/JDK for native builds
 
 ```bash
 npm ci
-npm run typecheck
-npm run test:product
-npm run check:contracts
-npm run check:baseline
-npm run sanitize
+npm run ci
 ```
 
-Useful focused suites remain available as `npm run test:m1` through `npm run test:m8`.
-
-For Expo development:
+For local Expo development:
 
 ```bash
 npm start
 ```
 
-For Android native generation/build work, use the development-build path rather than Expo Go. Generated `android/` and `ios/` directories are disposable CNG output and are ignored by Git.
-
-## Development APK
-
-On a machine with the required Android SDK/JDK:
+For a clean Android APK build:
 
 ```bash
-export PARTNERSCREEN_BUILD_COMMIT="$(git rev-parse HEAD)"
-npm run build:dev-apk -- --preflight
-npm run build:dev-apk
+npm run build:apk
 ```
 
-The build script creates development-only signing material and output; these artifacts must not be committed.
+The APK build performs a clean Android prebuild and writes development artifacts to `dist/`.
 
-## Before changing code
+## Architecture rule
 
-Developers and AI agents should read:
+Product-session, control-connection, and WebRTC lifetimes are separate.
 
-1. `AGENTS.md` — permanent engineering rules.
-2. `CHECKPOINT.md` — current status, blockers, and next intended work.
-3. Only the relevant file under `docs/` for the subsystem being changed.
-4. The implementation and tests themselves, which remain the final truth for current behavior.
+```text
+Bad frame      -> keyframe recovery
+Bad ICE        -> ICE recovery
+Bad control    -> authenticated control reconnect
+Persistent media failure -> fail the product session
+```
 
-## Durable references
-
-- `docs/product.md` — product boundary, canonical flow, privacy and non-goals.
-- `docs/architecture.md` — ownership, state, lifecycle and source map.
-- `docs/protocol-security.md` — pairing, trusted control, replay and security rules.
-- `docs/android-media.md` — Android native, MediaProjection, WebRTC and renderer rules.
-- `docs/verification.md` — validation commands and physical-device acceptance.
-
-Current progress does **not** belong in this README; update `CHECKPOINT.md` instead.
+Only product-session code decides that the user-visible sharing session is over.

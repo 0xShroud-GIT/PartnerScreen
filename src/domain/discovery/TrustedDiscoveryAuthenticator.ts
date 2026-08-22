@@ -49,7 +49,7 @@ export class HmacDiscoveryAuthenticator {
   async derivePeerHint(pairSecretHex: string, nonce: string): Promise<string> {
     const secret = this.requireSecret(pairSecretHex);
     const normalizedNonce = validateNonce(nonce);
-    const message = requireAscii(`PartnerScreen|discovery-hint|v1|${normalizedNonce}`);
+    const message = requireAscii(`Chirp|discovery-hint|v1|${normalizedNonce}`);
     return (await this.mac(secret, message)).slice(0, DISCOVERY_HINT_HEX_LENGTH);
   }
 
@@ -57,7 +57,7 @@ export class HmacDiscoveryAuthenticator {
     validateProofInput(input);
     const secret = this.requireSecret(pairSecretHex);
     const portHex = controlPortHex(input.controlPort);
-    const message = requireAscii(`PartnerScreen|discovery-proof|v2|${input.nonce.toLowerCase()}|${input.host}|${input.port}|${input.controlPort}`);
+    const message = requireAscii(`Chirp|discovery-proof|v2|${input.nonce.toLowerCase()}|${input.host}|${input.port}|${input.controlPort}`);
     const mac = await this.mac(secret, message);
     return `${portHex}${mac.slice(CONTROL_PORT_HEX_LENGTH)}`;
   }

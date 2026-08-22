@@ -23,7 +23,7 @@ type NativeControlModule = {
   startTrustedPresence?(): Promise<boolean>;
   stopTrustedPresence?(): Promise<boolean>;
   getActiveListener?(): ControlListenerEndpoint | null;
-  addListener(eventName: 'onPartnerControlEvent', listener: (event: unknown) => void): { remove(): void };
+  addListener(eventName: 'onChirpControlEvent', listener: (event: unknown) => void): { remove(): void };
 };
 declare const require: (modulePath: string) => { default: NativeControlModule };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -33,7 +33,7 @@ const NATIVE_CONTROL_CONNECT_TIMEOUT_MS = 10_000;
 const NATIVE_CONTROL_IO_TIMEOUT_MS = 5_000;
 const NATIVE_CONTROL_CLEANUP_TIMEOUT_MS = 3_000;
 let nativeModule: NativeControlModule | null = null;
-function module(): NativeControlModule { if (!nativeModule) nativeModule = require('../../../modules/partner-control').default; return nativeModule; }
+function module(): NativeControlModule { if (!nativeModule) nativeModule = require('../../../modules/chirp-control').default; return nativeModule; }
 export class ControlTransportError extends Error { constructor(readonly code: 'wifi_unavailable' | 'busy' | 'connect_failed' | 'send_failed' | 'cleanup_failed', message: string) { super(message); this.name = 'ControlTransportError'; } }
 function raw(error: unknown): string { return error instanceof Error ? error.message : String(error ?? ''); }
 function validPort(value: unknown): value is number { return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535; }
@@ -98,11 +98,11 @@ export class ExpoControlTransport implements ControlTransport {
       if (!value || !UUID_RE.test(value.listenerId) || !privateIpv4(value.host) || !validPort(value.port)) throw new Error('invalid');
       return value;
     }
-    catch (error) { if (/Wi-?Fi|private IPv4/i.test(raw(error))) throw new ControlTransportError('wifi_unavailable', 'Control connection needs active Wi-Fi.'); throw new ControlTransportError('connect_failed', 'PartnerScreen could not open its local control listener.'); }
+    catch (error) { if (/Wi-?Fi|private IPv4/i.test(raw(error))) throw new ControlTransportError('wifi_unavailable', 'Control connection needs active Wi-Fi.'); throw new ControlTransportError('connect_failed', 'Chirp could not open its local control listener.'); }
   }
   async stopListener(listenerId: string): Promise<void> {
     try { await withTimeout(module().stopListener(listenerId), NATIVE_CONTROL_CLEANUP_TIMEOUT_MS, 'Control listener stop timed out.'); }
-    catch { throw new ControlTransportError('cleanup_failed', 'PartnerScreen could not close its control listener.'); }
+    catch { throw new ControlTransportError('cleanup_failed', 'Chirp could not close its control listener.'); }
   }
   async connect(host: string, port: number): Promise<string> {
     try {
@@ -110,7 +110,7 @@ export class ExpoControlTransport implements ControlTransport {
       if (!UUID_RE.test(id)) throw new Error('invalid connection id');
       return id;
     }
-    catch (error) { const message = raw(error); if (/Wi-?Fi|private IPv4|route/i.test(message)) throw new ControlTransportError('wifi_unavailable', 'Control connection needs a reachable trusted phone on Wi-Fi.'); if (/busy|already active/i.test(message)) throw new ControlTransportError('busy', 'A PartnerScreen control session is already active.'); throw new ControlTransportError('connect_failed', 'PartnerScreen could not connect to the trusted phone.'); }
+    catch (error) { const message = raw(error); if (/Wi-?Fi|private IPv4|route/i.test(message)) throw new ControlTransportError('wifi_unavailable', 'Control connection needs a reachable trusted phone on Wi-Fi.'); if (/busy|already active/i.test(message)) throw new ControlTransportError('busy', 'A Chirp control session is already active.'); throw new ControlTransportError('connect_failed', 'Chirp could not connect to the trusted phone.'); }
   }
   async send(connectionId: string, frame: string): Promise<void> {
     try { await withTimeout(module().send(connectionId, frame), NATIVE_CONTROL_IO_TIMEOUT_MS, 'Control send timed out.'); }
@@ -118,7 +118,7 @@ export class ExpoControlTransport implements ControlTransport {
   }
   async close(connectionId: string): Promise<void> {
     try { await withTimeout(module().close(connectionId), NATIVE_CONTROL_CLEANUP_TIMEOUT_MS, 'Control close timed out.'); }
-    catch { throw new ControlTransportError('cleanup_failed', 'PartnerScreen could not close the control channel cleanly.'); }
+    catch { throw new ControlTransportError('cleanup_failed', 'Chirp could not close the control channel cleanly.'); }
   }
-  subscribe(listener: (event: ControlTransportEvent) => void): () => void { const sub = module().addListener('onPartnerControlEvent', (rawEvent) => { const event = parseEvent(rawEvent); if (event) listener(event); }); return () => sub.remove(); }
+  subscribe(listener: (event: ControlTransportEvent) => void): () => void { const sub = module().addListener('onChirpControlEvent', (rawEvent) => { const event = parseEvent(rawEvent); if (event) listener(event); }); return () => sub.remove(); }
 }

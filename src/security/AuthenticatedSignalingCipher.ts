@@ -60,7 +60,7 @@ export class AuthenticatedSignalingCipher {
 
   async hello1Mac(pairSecretHex: string, frame: Omit<Hello1Frame, 'mac'>): Promise<string> {
     const message = requireAscii(
-      `PartnerScreen|control-hello1|v1|${requireUuid(frame.helloId)}|${requireUuid(frame.sessionId)}|${requireUuid(frame.senderDeviceId)}|${requireNonce(frame.nonce)}|${frame.timestamp}`,
+      `Chirp|control-hello1|v1|${requireUuid(frame.helloId)}|${requireUuid(frame.sessionId)}|${requireUuid(frame.senderDeviceId)}|${requireNonce(frame.nonce)}|${frame.timestamp}`,
     );
     return this.mac(requireSecret(pairSecretHex), message);
   }
@@ -74,7 +74,7 @@ export class AuthenticatedSignalingCipher {
 
   async hello2Mac(pairSecretHex: string, frame: Omit<Hello2Frame, 'mac'>): Promise<string> {
     const message = requireAscii(
-      `PartnerScreen|control-hello2|v1|${requireUuid(frame.helloId)}|${requireUuid(frame.sessionId)}|${requireUuid(frame.senderDeviceId)}|${requireNonce(frame.nonce)}|${requireNonce(frame.echoNonce)}|${requireUuid(frame.initiatorDeviceId)}|${frame.timestamp}`,
+      `Chirp|control-hello2|v1|${requireUuid(frame.helloId)}|${requireUuid(frame.sessionId)}|${requireUuid(frame.senderDeviceId)}|${requireNonce(frame.nonce)}|${requireNonce(frame.echoNonce)}|${requireUuid(frame.initiatorDeviceId)}|${frame.timestamp}`,
     );
     return this.mac(requireSecret(pairSecretHex), message);
   }
@@ -88,7 +88,7 @@ export class AuthenticatedSignalingCipher {
 
   async deriveSessionKey(pairSecretHex: string, context: ControlSessionKeyContext): Promise<string> {
     const message = requireAscii(
-      `PartnerScreen|control-session-key|v1|${requireUuid(context.sessionId)}|${requireUuid(context.initiatorDeviceId)}|${requireUuid(context.responderDeviceId)}|${requireNonce(context.initiatorNonce)}|${requireNonce(context.responderNonce)}`,
+      `Chirp|control-session-key|v1|${requireUuid(context.sessionId)}|${requireUuid(context.initiatorDeviceId)}|${requireUuid(context.responderDeviceId)}|${requireNonce(context.initiatorNonce)}|${requireNonce(context.responderNonce)}`,
     );
     return this.mac(requireSecret(pairSecretHex), message);
   }
@@ -128,7 +128,7 @@ export class AuthenticatedSignalingCipher {
   }
 
   private aad(sessionId: string, senderDeviceId: string, sequence: number, type: string): string {
-    return requireAscii(`PartnerScreen|control-message|v1|${requireUuid(sessionId)}|${requireUuid(senderDeviceId)}|${sequence}|${type}`);
+    return requireAscii(`Chirp|control-message|v1|${requireUuid(sessionId)}|${requireUuid(senderDeviceId)}|${sequence}|${type}`);
   }
 
   private async mac(keyHex: string, message: string): Promise<string> {

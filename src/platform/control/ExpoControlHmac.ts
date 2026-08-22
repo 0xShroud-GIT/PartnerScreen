@@ -5,7 +5,7 @@ declare const require: (modulePath: string) => { default: NativeHmacModule };
 let nativeModule: NativeHmacModule | null = null;
 
 function module(): NativeHmacModule {
-  if (!nativeModule) nativeModule = require('../../../modules/partner-discovery-auth').default;
+  if (!nativeModule) nativeModule = require('../../../modules/chirp-discovery-auth').default;
   return nativeModule;
 }
 

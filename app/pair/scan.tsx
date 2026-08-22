@@ -1,31 +1,17 @@
 import { useEffect, useState } from 'react';
 import { router } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { usePairing } from '../../src/presentation/usePairing';
-import { consumeRuntimeLabPairingQr } from '../../src/runtime/RuntimeLabPairingInput';
-import { runtimeLabPairingCameraSubstituteEnabled } from '../../src/runtime/RuntimeLabFlags';
 
 export default function ScanPairScreen() {
   const pairing = usePairing();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanLocked, setScanLocked] = useState(false);
-  const runtimeLabInput = runtimeLabPairingCameraSubstituteEnabled();
 
   useEffect(() => {
     if (pairing.state.kind === 'paired') router.replace('/');
   }, [pairing.state.kind]);
-
-  useEffect(() => {
-    if (!runtimeLabInput || pairing.state.kind !== 'unpaired' || scanLocked) return;
-    let cancelled = false;
-    void consumeRuntimeLabPairingQr().then((payload) => {
-      if (cancelled || !payload) return;
-      setScanLocked(true);
-      void pairing.startScanner(payload).catch(() => undefined);
-    });
-    return () => { cancelled = true; };
-  }, [runtimeLabInput, pairing.state.kind, scanLocked]);
 
   const cancel = async () => {
     try {
@@ -45,29 +31,25 @@ export default function ScanPairScreen() {
   const scanning = pairing.state.kind === 'unpaired' && !scanLocked;
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
       <Text accessibilityRole="header" style={styles.title}>Scan partner QR</Text>
-      <Text style={styles.help}>Only scan a QR shown inside PartnerScreen on the phone you intend to trust.</Text>
+      <Text style={styles.help}>Only scan a QR shown inside Chirp on the phone you intend to trust.</Text>
 
-      {runtimeLabInput && scanning ? (
+      {!permission ? <ActivityIndicator color="#ffffff" /> : null}
+      {permission && !permission.granted ? (
         <View style={styles.card}>
-          <ActivityIndicator />
-          <Text style={styles.label}>Runtime Lab pairing input ready</Text>
-          <Text style={styles.help}>Waiting for the emulator runner to provide the creator's real one-time QR payload. Normal PartnerScreen authentication and confirmation still apply.</Text>
-        </View>
-      ) : null}
-
-      {!runtimeLabInput && !permission ? <ActivityIndicator /> : null}
-      {!runtimeLabInput && permission && !permission.granted ? (
-        <View style={styles.card}>
-          <Text style={styles.label}>Camera permission is needed only to scan the pairing QR.</Text>
-          <Pressable accessibilityRole="button" onPress={() => { void requestPermission(); }} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
-            <Text style={styles.primaryText}>Allow camera</Text>
+          <Text style={styles.label}>Camera access is needed only to scan the temporary pairing QR.</Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => { if (permission.canAskAgain) void requestPermission(); else void Linking.openSettings(); }}
+            style={({ pressed }) => [styles.primary, pressed && styles.pressed]}
+          >
+            <Text style={styles.primaryText}>{permission.canAskAgain ? 'Allow camera' : 'Open camera settings'}</Text>
           </Pressable>
         </View>
       ) : null}
 
-      {!runtimeLabInput && permission?.granted && scanning ? (
+      {permission?.granted && scanning ? (
         <View style={styles.cameraFrame}>
           <CameraView
             barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
@@ -79,12 +61,13 @@ export default function ScanPairScreen() {
             }}
             style={styles.camera}
           />
+          <View pointerEvents="none" style={styles.scanGuide} />
         </View>
       ) : null}
 
       {pairing.state.kind === 'waiting_partner' && pairing.state.role === 'scanner' ? (
         <View style={styles.card}>
-          <ActivityIndicator />
+          <ActivityIndicator color="#ffffff" />
           {pairing.state.peer ? <Peer peer={pairing.state.peer} /> : null}
           <Text style={styles.help}>{pairing.state.message}</Text>
         </View>
@@ -94,7 +77,7 @@ export default function ScanPairScreen() {
         <View style={styles.card}>
           <Text style={styles.label}>Authenticated phone</Text>
           <Peer peer={pairing.state.peer} />
-          <Text style={styles.help}>Check that this name matches the phone showing the QR. You confirm first; the creator must then confirm you separately.</Text>
+          <Text style={styles.help}>Check that this name matches the phone showing the QR. Both phones must confirm independently.</Text>
           <Pressable accessibilityRole="button" onPress={() => { void pairing.confirmPartner().catch(() => undefined); }} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
             <Text style={styles.primaryText}>Confirm this phone</Text>
           </Pressable>
@@ -103,9 +86,9 @@ export default function ScanPairScreen() {
 
       {pairing.state.kind === 'finalizing' && pairing.state.role === 'scanner' ? (
         <View style={styles.card}>
-          <ActivityIndicator />
+          <ActivityIndicator color="#ffffff" />
           <Text style={styles.label}>Saving trust on both phones…</Text>
-          <Text style={styles.help}>Keep PartnerScreen open until pairing finishes.</Text>
+          <Text style={styles.help}>Keep both phones in Chirp until pairing finishes.</Text>
         </View>
       ) : null}
 
@@ -135,22 +118,24 @@ function Peer({ peer }: { peer: { deviceName: string; deviceId: string } }) {
 }
 
 const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: '#0b0d10' },
   container: { flexGrow: 1, gap: 18, padding: 24, paddingBottom: 40 },
-  title: { fontSize: 28, fontWeight: '800' },
-  help: { fontSize: 14, lineHeight: 20, opacity: 0.75 },
-  card: { borderWidth: 1, borderColor: '#999', borderRadius: 14, gap: 14, padding: 16 },
-  label: { fontSize: 17, fontWeight: '700', textAlign: 'center' },
-  cameraFrame: { height: 360, overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: '#777' },
+  title: { color: '#ffffff', fontSize: 28, fontWeight: '800' },
+  help: { color: '#b8c0cb', fontSize: 14, lineHeight: 20 },
+  card: { backgroundColor: '#15191f', borderWidth: StyleSheet.hairlineWidth, borderColor: '#303741', borderRadius: 16, gap: 14, padding: 16 },
+  label: { color: '#ffffff', fontSize: 17, fontWeight: '700', textAlign: 'center' },
+  cameraFrame: { height: 360, overflow: 'hidden', borderRadius: 18, borderWidth: 1, borderColor: '#3a4350', backgroundColor: '#11151a' },
   camera: { flex: 1 },
+  scanGuide: { position: 'absolute', left: '14%', right: '14%', top: '20%', bottom: '20%', borderWidth: 2, borderColor: '#ffffff', borderRadius: 18, opacity: 0.9 },
   peer: { gap: 4, alignItems: 'center' },
-  peerName: { fontSize: 24, fontWeight: '800' },
-  peerId: { fontFamily: 'monospace', opacity: 0.72 },
-  primary: { alignItems: 'center', backgroundColor: '#111', borderRadius: 10, padding: 14 },
-  primaryText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  cancel: { alignItems: 'center', borderWidth: 1, borderColor: '#a00', borderRadius: 10, padding: 13 },
-  cancelText: { color: '#a00', fontWeight: '700' },
-  pressed: { opacity: 0.7 },
-  errorBox: { borderWidth: 1, borderColor: '#a00', borderRadius: 10, gap: 10, padding: 12 },
-  error: { color: '#a00' },
-  link: { fontWeight: '700', textDecorationLine: 'underline' },
+  peerName: { color: '#ffffff', fontSize: 24, fontWeight: '800' },
+  peerId: { color: '#9da7b4', fontFamily: 'monospace' },
+  primary: { minHeight: 50, alignItems: 'center', justifyContent: 'center', backgroundColor: '#ffffff', borderRadius: 12, padding: 14 },
+  primaryText: { color: '#0b0d10', fontSize: 16, fontWeight: '700' },
+  cancel: { minHeight: 48, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#754044', backgroundColor: '#241517', borderRadius: 12, padding: 13 },
+  cancelText: { color: '#ffb5ba', fontWeight: '700' },
+  pressed: { opacity: 0.65 },
+  errorBox: { borderWidth: 1, borderColor: '#754044', backgroundColor: '#241517', borderRadius: 12, gap: 10, padding: 14 },
+  error: { color: '#ffb5ba', lineHeight: 20 },
+  link: { color: '#ffffff', fontWeight: '700', textDecorationLine: 'underline' },
 });

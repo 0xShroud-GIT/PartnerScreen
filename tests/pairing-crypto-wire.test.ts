@@ -16,9 +16,9 @@ import {
 
 const VECTOR_KEY_HEX = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';
 const VECTOR_IV_HEX = '101112131415161718191a1b';
-const VECTOR_AAD = 'PartnerScreen|AES-GCM|v1';
-const VECTOR_PLAINTEXT = 'PartnerScreen runtime crypto self-test';
-const VECTOR_COMBINED_HEX = '101112131415161718191a1b2d9fea6227ac48e0a9076d7861591b26b92427637ee234c39e8996087e2731b736c4236686d21053acab1591771a482c53aba36c1712';
+const VECTOR_AAD = 'Chirp|AES-GCM|v1';
+const VECTOR_PLAINTEXT = 'Chirp runtime crypto self-test';
+const VECTOR_COMBINED_HEX = '101112131415161718191a1b3e96f16439e948c6a40161706a590a21ae203a613bb132dd81d496022d2024a2340e85433924c7dbf7f7cfeaeb99';
 
 function nodeSeal(keyHex: string, aad: string, plaintext: string, iv = randomBytes(PAIRING_AES_IV_BYTES)): string {
   const cipher = createCipheriv('aes-256-gcm', Buffer.from(keyHex, 'hex'), iv);

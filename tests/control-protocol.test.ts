@@ -56,7 +56,7 @@ test('session key and hello authentication match independent Node HMAC', async (
   const cipher = new AuthenticatedSignalingCipher(new NodeAes(), new NodeHmac());
   const context = { sessionId, initiatorDeviceId: localId, responderDeviceId: partnerId, initiatorNonce: '10'.repeat(16), responderNonce: '20'.repeat(16) };
   const actual = await cipher.deriveSessionKey(secret, context);
-  const expected = createHmac('sha256', Buffer.from(secret, 'hex')).update(`PartnerScreen|control-session-key|v1|${sessionId}|${localId}|${partnerId}|${context.initiatorNonce}|${context.responderNonce}`, 'ascii').digest('hex');
+  const expected = createHmac('sha256', Buffer.from(secret, 'hex')).update(`Chirp|control-session-key|v1|${sessionId}|${localId}|${partnerId}|${context.initiatorNonce}|${context.responderNonce}`, 'ascii').digest('hex');
   assert.equal(actual, expected);
 });
 

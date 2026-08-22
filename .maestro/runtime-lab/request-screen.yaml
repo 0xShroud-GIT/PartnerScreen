@@ -1,6 +1,0 @@
-appId: com.partnerscreen.app
----
-- tapOn: "Request Screen"
-- extendedWaitUntil:
-    visible: "Request pending"
-    timeout: 10000

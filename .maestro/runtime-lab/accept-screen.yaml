@@ -1,9 +1,0 @@
-appId: com.partnerscreen.app
----
-- extendedWaitUntil:
-    visible: "Screen request received"
-    timeout: 15000
-- tapOn: "Accept and choose screen"
-- extendedWaitUntil:
-    visible: "Android screen capture active"
-    timeout: 15000

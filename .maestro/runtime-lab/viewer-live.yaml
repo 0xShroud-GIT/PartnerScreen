@@ -1,7 +1,0 @@
-appId: com.partnerscreen.app
----
-- extendedWaitUntil:
-    visible: "LIVE"
-    timeout: 25000
-- assertVisible: "Trusted partner remote screen video"
-- assertVisible: "Stop screen session"

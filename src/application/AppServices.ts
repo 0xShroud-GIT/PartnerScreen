@@ -3,7 +3,7 @@ import { HmacDiscoveryAuthenticator } from '../domain/discovery/TrustedDiscovery
 import { IdentityRepository, type Clock } from '../domain/identity/IdentityRepository';
 import { PairTrustRepository } from '../domain/pairing/PairTrustRepository';
 import { ExpoDiscoveryHmac } from '../platform/discovery/ExpoDiscoveryHmac';
-import { ExpoPartnerDiscovery } from '../platform/discovery/ExpoPartnerDiscovery';
+import { ExpoChirpDiscovery } from '../platform/discovery/ExpoChirpDiscovery';
 import { ExpoDeviceIdFactory } from '../platform/identity/ExpoDeviceIdFactory';
 import { ExpoPairingCrypto } from '../platform/pairing/ExpoPairingCrypto';
 import { ExpoPairingTransport } from '../platform/pairing/ExpoPairingTransport';
@@ -12,24 +12,17 @@ import { ExpoSecureSecretStore } from '../platform/persistence/ExpoSecureSecretS
 import { ExpoControlTransport } from '../platform/control/ControlTransport';
 import { ExpoControlCrypto } from '../platform/control/ExpoControlCrypto';
 import { ExpoControlHmac } from '../platform/control/ExpoControlHmac';
-import { ExpoScreenCapture } from '../platform/capture/ExpoScreenCapture';
-import { ExpoWebRtcMedia } from '../platform/media/ExpoWebRtcMedia';
 import { AvailabilityService } from '../availability/AvailabilityService';
 import { ControlSession } from '../control/ControlSession';
 import { AuthenticatedSignalingCipher } from '../security/AuthenticatedSignalingCipher';
 import { PendingRequestStore } from '../request/PendingRequestStore';
 import { SessionController } from '../session/SessionController';
-import { ScreenCaptureCoordinator } from '../capture/ScreenCaptureCoordinator';
-import { MediaSessionController } from '../media/MediaSessionController';
+import { MediaSession } from '../media/MediaSession';
 import { InstrumentedPairingCrypto } from './InstrumentedPairingCrypto';
 import { LocalIdentityService } from './LocalIdentityService';
 import { PairingService } from './PairingService';
 import { IncomingRequestNotifier } from '../request/IncomingRequestNotifier';
 import { ExpoRequestNotification } from '../platform/notifications/ExpoRequestNotification';
-import { ExpoLifecycle } from '../platform/lifecycle/ExpoLifecycle';
-import { ExpoKeepAwake } from '../platform/keepawake/ExpoKeepAwake';
-import { ExpoPip } from '../platform/pip/ExpoPip';
-import { recoverProductError } from '../session/ErrorRecovery';
 
 const clock: Clock = { nowIso: () => new Date().toISOString() };
 const ordinaryStore = new AsyncStorageKeyValueStore();
@@ -39,39 +32,45 @@ const identityRepository = new IdentityRepository(ordinaryStore, new ExpoDeviceI
 const localIdentityService = new LocalIdentityService(identityRepository, diagnosticsRepository);
 const pairTrustRepository = new PairTrustRepository(ordinaryStore, secureStore);
 const pairingCrypto = new InstrumentedPairingCrypto(new ExpoPairingCrypto(), diagnosticsRepository);
-const pairingService = new PairingService(identityRepository, pairTrustRepository, diagnosticsRepository, new ExpoPairingTransport(), pairingCrypto);
+const pairingService = new PairingService(
+  identityRepository,
+  pairTrustRepository,
+  diagnosticsRepository,
+  new ExpoPairingTransport(),
+  pairingCrypto,
+);
 
-const controlSession = new ControlSession(new ExpoControlTransport(), new AuthenticatedSignalingCipher(new ExpoControlCrypto(), new ExpoControlHmac()));
+const controlSession = new ControlSession(
+  new ExpoControlTransport(),
+  new AuthenticatedSignalingCipher(new ExpoControlCrypto(), new ExpoControlHmac()),
+);
 const pendingRequestStore = new PendingRequestStore(ordinaryStore);
-const sessionController = new SessionController(identityRepository, pairTrustRepository, pendingRequestStore, controlSession, diagnosticsRepository);
-const screenCapturePort = new ExpoScreenCapture();
-const screenCaptureCoordinator = new ScreenCaptureCoordinator(screenCapturePort, sessionController, diagnosticsRepository);
-const webRtcMediaPort = new ExpoWebRtcMedia();
-const mediaSessionController = new MediaSessionController(webRtcMediaPort, sessionController, screenCaptureCoordinator, diagnosticsRepository);
+const sessionController = new SessionController(
+  identityRepository,
+  pairTrustRepository,
+  pendingRequestStore,
+  controlSession,
+  diagnosticsRepository,
+);
+const mediaSession = new MediaSession(sessionController, diagnosticsRepository);
 const discoveryAuthenticator = new HmacDiscoveryAuthenticator(new ExpoDiscoveryHmac());
-const availabilityService = new AvailabilityService(pairTrustRepository, diagnosticsRepository, new ExpoPartnerDiscovery(), discoveryAuthenticator, controlSession);
+const availabilityService = new AvailabilityService(
+  pairTrustRepository,
+  diagnosticsRepository,
+  new ExpoChirpDiscovery(),
+  discoveryAuthenticator,
+  controlSession,
+);
 const requestNotificationPort = new ExpoRequestNotification();
-const incomingRequestNotifier = new IncomingRequestNotifier(sessionController, requestNotificationPort, diagnosticsRepository);
-const lifecyclePort = new ExpoLifecycle();
-const keepAwakePort = new ExpoKeepAwake();
-const pipPort = new ExpoPip();
+const incomingRequestNotifier = new IncomingRequestNotifier(
+  sessionController,
+  requestNotificationPort,
+  diagnosticsRepository,
+);
 
-availabilityService.subscribe(() => sessionController.updateAvailability(availabilityService.getSnapshot()));
-
-// Lifecycle diagnostics: activity lifecycle + app background/foreground instrumentation
-try {
-  lifecyclePort.subscribe((event) => {
-    void diagnosticsRepository.append(event.type as any).catch(() => undefined);
-  });
-  // AppState background/foreground is handled in React layer via AppState listener (see _layout)
-  // Native pip events are also observed there; keep this native subscription lightweight.
-  pipPort.subscribe((event) => {
-    const kind = event.isInPictureInPictureMode ? 'pip_entered' : 'pip_exited';
-    void diagnosticsRepository.append(kind as any).catch(() => undefined);
-  });
-} catch {
-  // diagnostics never break product flow
-}
+availabilityService.subscribe(() => {
+  sessionController.updateAvailability(availabilityService.getSnapshot());
+});
 
 let pairedLifecycle: Promise<void> = Promise.resolve();
 pairingService.subscribe(() => {
@@ -82,6 +81,7 @@ pairingService.subscribe(() => {
       await availabilityService.activate(state.pair);
       sessionController.updateAvailability(availabilityService.getSnapshot());
     } else if (state.kind === 'unpaired') {
+      await mediaSession.stop();
       await availabilityService.deactivate();
       await sessionController.deactivatePair();
     }
@@ -90,18 +90,23 @@ pairingService.subscribe(() => {
 void pairingService.initialize().catch(() => undefined);
 
 export async function recoverFromError(): Promise<void> {
-  await recoverProductError({
-    session: sessionController,
-    media: mediaSessionController,
-    capture: screenCaptureCoordinator,
-    notifications: requestNotificationPort,
-    pip: pipPort,
-    keepAwake: keepAwakePort,
-  });
+  await mediaSession.stop();
+  await sessionController.recover();
+  await mediaSession.reconcile();
 }
 
 export const appServices = {
-  clock, diagnosticsRepository, identityRepository, localIdentityService, pairTrustRepository, pairingService,
-  availabilityService, controlSession, sessionController, screenCaptureCoordinator, mediaSessionController,
-  incomingRequestNotifier, requestNotificationPort, lifecyclePort, keepAwakePort, pipPort, recoverFromError,
+  clock,
+  diagnosticsRepository,
+  identityRepository,
+  localIdentityService,
+  pairTrustRepository,
+  pairingService,
+  availabilityService,
+  controlSession,
+  sessionController,
+  mediaSession,
+  incomingRequestNotifier,
+  requestNotificationPort,
+  recoverFromError,
 };

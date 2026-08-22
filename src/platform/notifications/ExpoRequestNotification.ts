@@ -28,7 +28,7 @@ function getNative(): NativeModule | null {
   if (cached) return cached;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const mod = require('../../../modules/partner-request-notification').default as NativeModule;
+    const mod = require('../../../modules/chirp-request-notification').default as NativeModule;
     cached = mod;
     return cached;
   } catch {
