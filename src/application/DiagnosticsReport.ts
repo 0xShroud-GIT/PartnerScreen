@@ -28,6 +28,12 @@ export function buildDiagnosticReport(input: DiagnosticReportInput): string {
     'lastMedia:',
     `state=${media.state}`,
     `role=${media.role ?? 'none'}`,
+    // Transport state fields preserved across teardown for post-mortem analysis.
+    `connectionState=${media.connectionState ?? 'n/a'}`,
+    `iceConnectionState=${media.iceConnectionState ?? 'n/a'}`,
+    `iceGatheringState=${media.iceGatheringState ?? 'n/a'}`,
+    `signalingState=${media.signalingState ?? 'n/a'}`,
+    `lastFailureReason=${media.lastFailureReason ?? 'none'}`,
     `remoteTrackSeen=${media.remoteTrackSeen}`,
     `firstFrameSeen=${media.firstFrameSeen}`,
     `localCandidatesAccepted=${media.acceptedLocalCandidates}`,
@@ -35,8 +41,9 @@ export function buildDiagnosticReport(input: DiagnosticReportInput): string {
     `remoteCandidatesAccepted=${media.acceptedRemoteCandidates}`,
     `remoteCandidatesRejected=${media.rejectedRemoteCandidates}`,
     `restartAttempts=${media.restartAttempts}`,
-    `keyframeRequests=${media.keyframeRequests}`,
-    `keyframeForces=${media.keyframeForces}`,
+    // Note: keyframeRequests and keyframeForces were removed in PR #23 (WebRTC stabilization).
+    // Active MEDIA_KEYFRAME_REQUEST sending and track.enabled toggling were removed.
+    // libwebrtc owns RTCP PLI/FIR/keyframe behavior. PLI/FIR counts are now in stats.
     `bitrateParametersApplied=${media.bitrateParametersApplied}`,
     `sendBitrateBps=${value(stats?.sendBitrateBps === undefined ? undefined : Math.round(stats.sendBitrateBps))}`,
     `receiveBitrateBps=${value(stats?.receiveBitrateBps === undefined ? undefined : Math.round(stats.receiveBitrateBps))}`,

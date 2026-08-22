@@ -67,30 +67,44 @@ for (const invariant of [
   'SCREEN_MIN_BITRATE_BPS = 1_000_000',
   'SCREEN_MAX_BITRATE_BPS = 8_000_000',
   'MEDIA_DISCONNECTED_GRACE_MS = 3_000',
-  'MEDIA_KEYFRAME_REQUEST_DELAYS_MS',
-  'MEDIA_KEYFRAME_STEADY_RETRY_MS = 5_000',
   'MEDIA_SIGNAL_RETRY_MS = 1_000',
+  'MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS = 60_000',
   "degradationPreference: 'maintain-resolution'",
 ]) {
   if (!mediaPolicy.includes(invariant)) fail(`media policy invariant missing: ${invariant}`);
 }
+if (/MEDIA_KEYFRAME_|keyframeRetryDelayMs/.test(mediaPolicy)) fail('dead app-level keyframe timing policy must not return');
 
 const mediaSession = read('src/media/MediaSession.ts');
+if (/\.enabled\s*=\s*false/.test(mediaSession)) fail('active screen-capture tracks must never be disabled to manipulate encoder state');
+if (mediaSession.includes("sendMedia(sessionId, 'MEDIA_KEYFRAME_REQUEST'")) fail('current Chirp must never send the retired keyframe command');
+if (/forceKeyframe\s*\(|scheduleKeyframeRecovery|keyframeTimer|keyframeAttempt/.test(mediaSession)) fail('app-level keyframe recovery must remain deleted');
+if (/new\s+MediaStream\s*\(\s*\[\s*event\.track\s*\]\s*\)/.test(mediaSession)) fail('synthetic remote MediaStream fallback must not return');
+if (/remoteStream\s*\?\s*\.getTracks\s*\(\s*\)\s*\.forEach\s*\([^\n]*\.stop\s*\(/.test(mediaSession)) fail('remote receiver tracks must be owned by PeerConnection teardown');
+
 for (const invariant of [
-  "sendMedia(sessionId, 'MEDIA_KEYFRAME_REQUEST'",
-  'MEDIA_KEYFRAME_STEADY_RETRY_MS',
+  'peerTransportDisposition(',
+  'settlePromiseWithTimeout(',
   'createOffer(iceRestart ? { iceRestart: true } : undefined)',
   'parameters.degradationPreference = patch.degradationPreference',
   'senderBitrateParameters(',
-  'await this.forceKeyframe(sessionId);',
-  "(track as unknown as EndedAwareTrack).onended = null",
-  "this.peer?.connectionState === 'connected'",
+  'archivedDiagnostic',
+  'archiveCurrentDiagnosticSnapshot()',
+  '(track as unknown as EndedAwareTrack).onended = null',
+  'const stream = event.streams?.[0]',
+  '(next.framesDecoded ?? 0) > 0',
   'getStatsSnapshot',
+  "noteFailure('send ICE_CANDIDATE'",
+  "rtcOperation('setRemoteDescription(offer)'",
+  "rtcOperation('setRemoteDescription(answer)'",
 ]) {
   if (!mediaSession.includes(invariant)) fail(`media recovery/observability invariant missing: ${invariant}`);
 }
-if (mediaSession.includes('if (this.keyframeAttempt >= MEDIA_KEYFRAME_REQUEST_DELAYS_MS.length)')) {
-  fail('first-frame keyframe exhaustion must not escalate into ICE recovery');
+if (!mediaSession.includes("message.type === 'MEDIA_KEYFRAME_REQUEST'")) fail('protocol-v1 keyframe command must remain an authenticated compatibility no-op');
+
+const runtimePolicy = read('src/media/MediaRuntimePolicy.ts');
+for (const invariant of ['peerTransportDisposition', "connectionState === 'failed'", "iceConnectionState === 'failed'", "status: 'timeout'", "status: 'rejected'"]) {
+  if (!runtimePolicy.includes(invariant)) fail(`media runtime policy invariant missing: ${invariant}`);
 }
 
 const home = read('app/index.tsx');

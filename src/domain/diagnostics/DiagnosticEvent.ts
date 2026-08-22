@@ -45,8 +45,6 @@ export type DiagnosticEventKind =
   | 'media_negotiation_started'
   | 'media_remote_track'
   | 'media_first_frame'
-  | 'media_keyframe_requested'
-  | 'media_keyframe_forced'
   | 'media_bitrate_parameters_failed'
   | 'media_degraded'
   | 'media_reconnect_attempt'
@@ -56,13 +54,19 @@ export type DiagnosticEventKind =
   | 'notification_shown'
   | 'notification_cleared';
 
+export type LegacyDiagnosticEventKind =
+  | 'media_keyframe_requested'
+  | 'media_keyframe_forced';
+
+export type StoredDiagnosticEventKind = DiagnosticEventKind | LegacyDiagnosticEventKind;
+
 export interface DiagnosticEvent {
   schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION;
   at: string;
-  kind: DiagnosticEventKind;
+  kind: StoredDiagnosticEventKind;
 }
 
-const VALID_KINDS = new Set<DiagnosticEventKind>([
+const CURRENT_KINDS = new Set<DiagnosticEventKind>([
   'app_started', 'identity_created', 'identity_loaded', 'device_name_updated',
   'identity_validation_rejected', 'identity_storage_error', 'pairing_started', 'pairing_scanned', 'pairing_cancelled',
   'pairing_failed', 'pairing_crypto_selftest_failed', 'pairing_crypto_failed',
@@ -75,8 +79,13 @@ const VALID_KINDS = new Set<DiagnosticEventKind>([
   'control_auth_failed', 'control_transport_failed', 'capture_consent_requested',
   'capture_consent_denied', 'capture_started', 'capture_stopped', 'capture_revoked',
   'capture_failed', 'media_negotiation_started', 'media_remote_track', 'media_first_frame',
-  'media_keyframe_requested', 'media_keyframe_forced', 'media_bitrate_parameters_failed', 'media_degraded', 'media_reconnect_attempt',
+  'media_bitrate_parameters_failed', 'media_degraded', 'media_reconnect_attempt',
   'media_reconnected', 'media_failed', 'media_stats', 'notification_shown', 'notification_cleared',
+]);
+
+const LEGACY_READABLE_KINDS = new Set<LegacyDiagnosticEventKind>([
+  'media_keyframe_requested',
+  'media_keyframe_forced',
 ]);
 
 export function isDiagnosticEvent(value: unknown): value is DiagnosticEvent {
@@ -84,9 +93,9 @@ export function isDiagnosticEvent(value: unknown): value is DiagnosticEvent {
   const candidate = value as Record<string, unknown>;
   const allowed = new Set(['schemaVersion', 'at', 'kind']);
   if (Object.keys(candidate).some((key) => !allowed.has(key))) return false;
-  return candidate.schemaVersion === DIAGNOSTIC_SCHEMA_VERSION &&
-    typeof candidate.at === 'string' &&
-    !Number.isNaN(Date.parse(candidate.at)) &&
-    typeof candidate.kind === 'string' &&
-    VALID_KINDS.has(candidate.kind as DiagnosticEventKind);
+  if (candidate.schemaVersion !== DIAGNOSTIC_SCHEMA_VERSION) return false;
+  if (typeof candidate.at !== 'string' || Number.isNaN(Date.parse(candidate.at))) return false;
+  if (typeof candidate.kind !== 'string') return false;
+  return CURRENT_KINDS.has(candidate.kind as DiagnosticEventKind) ||
+    LEGACY_READABLE_KINDS.has(candidate.kind as LegacyDiagnosticEventKind);
 }
