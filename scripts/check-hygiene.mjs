@@ -10,7 +10,8 @@ const read = (target) => fs.readFileSync(path.join(root, target), 'utf8');
 const tracked = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
 const textExtensions = new Set(['.ts', '.tsx', '.js', '.mjs', '.json', '.md', '.yml', '.yaml', '.kt', '.java', '.gradle', '.properties', '.xml', '.sh', '.txt']);
 for (const file of tracked) {
-  if (!textExtensions.has(path.extname(file)) && !['.gitignore'].includes(path.basename(file))) continue;
+  if (file === 'scripts/check-hygiene.mjs') continue;
+  if (!textExtensions.has(path.extname(file)) && path.basename(file) !== '.gitignore') continue;
   let text;
   try { text = read(file); } catch { continue; }
   if (/partnerscreen/i.test(text) || /partnerscreen/i.test(file)) fail(`legacy product branding remains in ${file}`);

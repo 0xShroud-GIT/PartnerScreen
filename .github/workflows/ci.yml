@@ -19,4 +19,10 @@ jobs:
           node-version: 22.13.1
           cache: npm
       - run: npm install --no-audit --no-fund
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chirp-generated-lock
+          path: package-lock.json
+          if-no-files-found: error
+          retention-days: 1
       - run: npm run ci
