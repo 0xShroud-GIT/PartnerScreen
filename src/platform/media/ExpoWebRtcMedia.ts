@@ -12,8 +12,12 @@ const NATIVE_MEDIA_CLOSE_TIMEOUT_MS = 3_000;
 const CONNECTION_STATES = new Set<MediaConnectionState>(['new', 'connecting', 'connected', 'disconnected', 'failed', 'closed']);
 const ICE_CONNECTION_STATES = new Set<MediaIceConnectionState>(['new', 'checking', 'connected', 'completed', 'failed', 'disconnected', 'closed']);
 const ICE_GATHERING_STATES = new Set<MediaIceGatheringState>(['new', 'gathering', 'complete']);
+const RENDERER_ROTATIONS = new Set([0, 90, 180, 270]);
 
 function validSession(value: unknown): value is string { return typeof value === 'string' && UUID_V4_RE.test(value); }
+function boundedRendererDimension(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 16_384;
+}
 
 async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -33,6 +37,35 @@ function parseEvent(raw: unknown): WebRtcMediaNativeEvent | null {
   if (!validSession(event.sessionId)) return null;
   if (event.type === 'remote_track' && Object.keys(event).every((key) => key === 'type' || key === 'sessionId')) return { type: 'remote_track', sessionId: event.sessionId };
   if (event.type === 'connection_state' && typeof event.state === 'string' && CONNECTION_STATES.has(event.state as MediaConnectionState) && Object.keys(event).every((key) => ['type', 'sessionId', 'state'].includes(key))) return { type: 'connection_state', sessionId: event.sessionId, state: event.state as MediaConnectionState };
+  if (event.type === 'ice_state'
+    && typeof event.iceConnectionState === 'string'
+    && typeof event.iceGatheringState === 'string'
+    && ICE_CONNECTION_STATES.has(event.iceConnectionState as MediaIceConnectionState)
+    && ICE_GATHERING_STATES.has(event.iceGatheringState as MediaIceGatheringState)
+    && Object.keys(event).every((key) => ['type', 'sessionId', 'iceConnectionState', 'iceGatheringState'].includes(key))) {
+    return {
+      type: 'ice_state',
+      sessionId: event.sessionId,
+      iceConnectionState: event.iceConnectionState as MediaIceConnectionState,
+      iceGatheringState: event.iceGatheringState as MediaIceGatheringState,
+    };
+  }
+  if (event.type === 'ice_classified' && Object.keys(event).every((key) => ['type', 'sessionId', 'classification'].includes(key))) {
+    const classification = sanitizeIceClassification(event.classification);
+    return classification ? { type: 'ice_classified', sessionId: event.sessionId, classification } : null;
+  }
+  if (event.type === 'renderer'
+    && typeof event.attached === 'boolean'
+    && Object.keys(event).every((key) => ['type', 'sessionId', 'attached', 'width', 'height', 'rotation'].includes(key))) {
+    const width = event.width;
+    const height = event.height;
+    const rotation = event.rotation;
+    if ((width === undefined) !== (height === undefined)) return null;
+    if ((width === undefined) !== (rotation === undefined)) return null;
+    if (width === undefined) return { type: 'renderer', sessionId: event.sessionId, attached: event.attached };
+    if (!boundedRendererDimension(width) || !boundedRendererDimension(height) || !Number.isInteger(rotation) || !RENDERER_ROTATIONS.has(rotation as number)) return null;
+    return { type: 'renderer', sessionId: event.sessionId, attached: event.attached, width, height, rotation: rotation as number };
+  }
   if (event.type === 'ice_candidate' && typeof event.sdpMid === 'string' && event.sdpMid.length <= 64 && Number.isInteger(event.sdpMLineIndex) && (event.sdpMLineIndex as number) >= 0 && (event.sdpMLineIndex as number) <= 32 && isSafePrivateHostCandidate(event.candidate) && Object.keys(event).every((key) => ['type', 'sessionId', 'sdpMid', 'sdpMLineIndex', 'candidate'].includes(key))) return { type: 'ice_candidate', sessionId: event.sessionId, sdpMid: event.sdpMid, sdpMLineIndex: event.sdpMLineIndex as number, candidate: event.candidate };
   return null;
 }
