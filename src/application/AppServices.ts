@@ -23,6 +23,9 @@ import { LocalIdentityService } from './LocalIdentityService';
 import { PairingService } from './PairingService';
 import { IncomingRequestNotifier } from '../request/IncomingRequestNotifier';
 import { ExpoRequestNotification } from '../platform/notifications/ExpoRequestNotification';
+import { systemRuntimeScheduler } from '../runtime/RuntimeScheduler';
+import { AvailabilityAwareControlChannel } from './AvailabilityAwareControlChannel';
+import { MediaDiagnosticPersistence } from './MediaDiagnosticPersistence';
 
 const clock: Clock = { nowIso: () => new Date().toISOString() };
 const ordinaryStore = new AsyncStorageKeyValueStore();
@@ -45,14 +48,6 @@ const controlSession = new ControlSession(
   new AuthenticatedSignalingCipher(new ExpoControlCrypto(), new ExpoControlHmac()),
 );
 const pendingRequestStore = new PendingRequestStore(ordinaryStore);
-const sessionController = new SessionController(
-  identityRepository,
-  pairTrustRepository,
-  pendingRequestStore,
-  controlSession,
-  diagnosticsRepository,
-);
-const mediaSession = new MediaSession(sessionController, diagnosticsRepository);
 const discoveryAuthenticator = new HmacDiscoveryAuthenticator(new ExpoDiscoveryHmac());
 const availabilityService = new AvailabilityService(
   pairTrustRepository,
@@ -60,7 +55,18 @@ const availabilityService = new AvailabilityService(
   new ExpoChirpDiscovery(),
   discoveryAuthenticator,
   controlSession,
+  systemRuntimeScheduler,
 );
+const availabilityAwareControl = new AvailabilityAwareControlChannel(controlSession, availabilityService);
+const sessionController = new SessionController(
+  identityRepository,
+  pairTrustRepository,
+  pendingRequestStore,
+  availabilityAwareControl,
+  diagnosticsRepository,
+);
+const mediaSession = new MediaSession(sessionController, diagnosticsRepository);
+const mediaDiagnosticPersistence = new MediaDiagnosticPersistence(ordinaryStore, mediaSession);
 const requestNotificationPort = new ExpoRequestNotification();
 const incomingRequestNotifier = new IncomingRequestNotifier(
   sessionController,
@@ -106,6 +112,7 @@ export const appServices = {
   controlSession,
   sessionController,
   mediaSession,
+  mediaDiagnosticPersistence,
   incomingRequestNotifier,
   requestNotificationPort,
   recoverFromError,
