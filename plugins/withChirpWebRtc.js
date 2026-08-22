@@ -1,7 +1,30 @@
-const { withMainActivity } = require('@expo/config-plugins');
+const fs = require('node:fs');
+const path = require('node:path');
+const { withDangerousMod, withMainActivity } = require('@expo/config-plugins');
+
+const FORBIDDEN_DEBUG_PERMISSIONS = [
+  'android.permission.RECORD_AUDIO',
+  'android.permission.SYSTEM_ALERT_WINDOW',
+];
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripForbiddenDebugPermissions(source) {
+  let next = source;
+  for (const permission of FORBIDDEN_DEBUG_PERMISSIONS) {
+    const pattern = new RegExp(
+      `\\s*<uses-permission\\b(?=[^>]*android:name=["']${escapeRegExp(permission)}["'])[^>]*/>`,
+      'g',
+    );
+    next = next.replace(pattern, '');
+  }
+  return next.replace(/\n{3,}/g, '\n\n');
+}
 
 module.exports = function withChirpWebRtc(config) {
-  return withMainActivity(config, (config) => {
+  config = withMainActivity(config, (config) => {
     const mod = config.modResults;
     if (mod.language !== 'kt') {
       throw new Error('Chirp expects a Kotlin MainActivity.');
@@ -29,4 +52,27 @@ module.exports = function withChirpWebRtc(config) {
     mod.contents = source;
     return config;
   });
+
+  return withDangerousMod(config, ['android', async (config) => {
+    const manifestPath = path.join(
+      config.modRequest.platformProjectRoot,
+      'app',
+      'src',
+      'debug',
+      'AndroidManifest.xml',
+    );
+    if (!fs.existsSync(manifestPath)) {
+      throw new Error('Expected Expo Android debug manifest was not generated.');
+    }
+
+    const source = fs.readFileSync(manifestPath, 'utf8');
+    const next = stripForbiddenDebugPermissions(source);
+    for (const permission of FORBIDDEN_DEBUG_PERMISSIONS) {
+      if (next.includes(permission)) {
+        throw new Error(`Forbidden debug permission remains after prebuild: ${permission}`);
+      }
+    }
+    fs.writeFileSync(manifestPath, next.endsWith('\n') ? next : `${next}\n`);
+    return config;
+  }]);
 };
