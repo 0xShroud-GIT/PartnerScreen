@@ -2,7 +2,7 @@ import PartnerScreenCaptureModule from '../../../modules/partner-screen-capture'
 import type { PartnerScreenMediaEvent } from '../../../modules/partner-screen-capture';
 import { UUID_V4_RE } from '../../protocol/ControlMessage';
 import { isSafePrivateHostCandidate, isSafeVideoSdp } from '../../protocol/MediaValidation';
-import { sanitizeIceClassification } from '../../media/IceCandidateClassification';
+import { sanitizeIceClassification, type SanitizedIceClassification } from '../../media/IceCandidateClassification';
 import { sanitizeMediaStats, type SanitizedMediaStats } from '../../media/MediaStats';
 import type { MediaIceConnectionState, MediaIceGatheringState } from '../../media/MediaTransportSnapshot';
 import type { MediaConnectionState, WebRtcMediaNativeEvent, WebRtcMediaPort } from '../../media/WebRtcMediaPort';
@@ -13,6 +13,52 @@ const CONNECTION_STATES = new Set<MediaConnectionState>(['new', 'connecting', 'c
 const ICE_CONNECTION_STATES = new Set<MediaIceConnectionState>(['new', 'checking', 'connected', 'completed', 'failed', 'disconnected', 'closed']);
 const ICE_GATHERING_STATES = new Set<MediaIceGatheringState>(['new', 'gathering', 'complete']);
 const RENDERER_ROTATIONS = new Set([0, 90, 180, 270]);
+
+export type PhysicalMediaDiagnosticSnapshot = {
+  observed: boolean;
+  peerConnectionState: MediaConnectionState | 'unknown';
+  iceConnectionState: MediaIceConnectionState | 'unknown';
+  iceGatheringState: MediaIceGatheringState | 'unknown';
+  everPeerConnected: boolean;
+  everIceConnected: boolean;
+  remoteTrackSeen: boolean;
+  localCandidatesGenerated: number;
+  localAccepted: number;
+  localRejected: number;
+  remoteAccepted: number;
+  remoteRejected: number;
+  lastLocalType?: SanitizedIceClassification['candidateType'];
+  lastRemoteType?: SanitizedIceClassification['candidateType'];
+  lastLocalTransport?: SanitizedIceClassification['transport'];
+  lastRemoteTransport?: SanitizedIceClassification['transport'];
+  lastLocalAddressFamily?: SanitizedIceClassification['addressFamily'];
+  lastRemoteAddressFamily?: SanitizedIceClassification['addressFamily'];
+  lastRejectionReason?: SanitizedIceClassification['rejectionReason'];
+  rendererAttached: boolean;
+  rendererEverAttached: boolean;
+  rendererWidth?: number;
+  rendererHeight?: number;
+  rendererRotation?: number;
+};
+
+function emptyPhysicalSnapshot(): PhysicalMediaDiagnosticSnapshot {
+  return {
+    observed: false,
+    peerConnectionState: 'unknown',
+    iceConnectionState: 'unknown',
+    iceGatheringState: 'unknown',
+    everPeerConnected: false,
+    everIceConnected: false,
+    remoteTrackSeen: false,
+    localCandidatesGenerated: 0,
+    localAccepted: 0,
+    localRejected: 0,
+    remoteAccepted: 0,
+    remoteRejected: 0,
+    rendererAttached: false,
+    rendererEverAttached: false,
+  };
+}
 
 function validSession(value: unknown): value is string { return typeof value === 'string' && UUID_V4_RE.test(value); }
 function boundedRendererDimension(value: unknown): value is number {
@@ -73,15 +119,20 @@ function parseEvent(raw: unknown): WebRtcMediaNativeEvent | null {
 export class ExpoWebRtcMedia implements WebRtcMediaPort {
   private readonly listeners = new Set<(event: WebRtcMediaNativeEvent) => void>();
   private readonly subscription: { remove(): void };
+  private diagnosticSessionId: string | null = null;
+  private diagnosticSnapshot = emptyPhysicalSnapshot();
 
   constructor() {
     this.subscription = PartnerScreenCaptureModule.addListener('onPartnerScreenMediaEvent', (raw: PartnerScreenMediaEvent) => {
       const event = parseEvent(raw);
-      if (event) for (const listener of this.listeners) listener(event);
+      if (!event) return;
+      this.observeForDiagnostics(event);
+      for (const listener of this.listeners) listener(event);
     });
   }
 
   subscribe(listener: (event: WebRtcMediaNativeEvent) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  getPhysicalDiagnosticSnapshot(): PhysicalMediaDiagnosticSnapshot { return { ...this.diagnosticSnapshot }; }
 
   async prepareRequester(sessionId: string): Promise<void> {
     if (!validSession(sessionId)) throw new Error('Remote video preparation failed.');
@@ -140,4 +191,46 @@ export class ExpoWebRtcMedia implements WebRtcMediaPort {
   }
 
   dispose(): void { this.subscription.remove(); this.listeners.clear(); }
+
+  private observeForDiagnostics(event: WebRtcMediaNativeEvent): void {
+    if (this.diagnosticSessionId !== event.sessionId) {
+      this.diagnosticSessionId = event.sessionId;
+      this.diagnosticSnapshot = emptyPhysicalSnapshot();
+    }
+    const next = { ...this.diagnosticSnapshot, observed: true };
+    if (event.type === 'connection_state') {
+      next.peerConnectionState = event.state;
+      if (event.state === 'connected') next.everPeerConnected = true;
+    } else if (event.type === 'ice_state') {
+      next.iceConnectionState = event.iceConnectionState;
+      next.iceGatheringState = event.iceGatheringState;
+      if (event.iceConnectionState === 'connected' || event.iceConnectionState === 'completed') next.everIceConnected = true;
+    } else if (event.type === 'remote_track') {
+      next.remoteTrackSeen = true;
+    } else if (event.type === 'ice_classified') {
+      const classification = event.classification;
+      if (classification.direction === 'local') {
+        next.localCandidatesGenerated += 1;
+        if (classification.accepted) next.localAccepted += 1;
+        else next.localRejected += 1;
+        next.lastLocalType = classification.candidateType;
+        next.lastLocalTransport = classification.transport;
+        next.lastLocalAddressFamily = classification.addressFamily;
+      } else {
+        if (classification.accepted) next.remoteAccepted += 1;
+        else next.remoteRejected += 1;
+        next.lastRemoteType = classification.candidateType;
+        next.lastRemoteTransport = classification.transport;
+        next.lastRemoteAddressFamily = classification.addressFamily;
+      }
+      if (classification.rejectionReason) next.lastRejectionReason = classification.rejectionReason;
+    } else if (event.type === 'renderer') {
+      next.rendererAttached = event.attached;
+      if (event.attached) next.rendererEverAttached = true;
+      if (event.width !== undefined) next.rendererWidth = event.width;
+      if (event.height !== undefined) next.rendererHeight = event.height;
+      if (event.rotation !== undefined) next.rendererRotation = event.rotation;
+    }
+    this.diagnosticSnapshot = next;
+  }
 }
