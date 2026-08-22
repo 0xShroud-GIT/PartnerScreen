@@ -18,3 +18,11 @@ test('foreground revalidates availability and trust revocation requires destruct
   assert.equal(pairing.includes("style: 'destructive'"), true);
   assert.equal(pairing.includes('pairingService.revokePair().finally(resolve)'), true);
 });
+
+test('persistent media diagnostics and stale-endpoint invalidation are wired into app services', () => {
+  const services = readFileSync('src/application/AppServices.ts', 'utf8');
+  const diagnostics = readFileSync('app/diagnostics.tsx', 'utf8');
+  assert.equal(services.includes('new AvailabilityAwareControlChannel(controlSession, availabilityService)'), true);
+  assert.equal(services.includes('new MediaDiagnosticPersistence(ordinaryStore, mediaSession)'), true);
+  assert.equal(diagnostics.includes('mediaDiagnosticPersistence.snapshotForReport('), true);
+});
