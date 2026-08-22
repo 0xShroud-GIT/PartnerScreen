@@ -94,8 +94,8 @@ if (mediaSession.includes('if (this.keyframeAttempt >= MEDIA_KEYFRAME_REQUEST_DE
 const home = read('app/index.tsx');
 const layout = read('app/_layout.tsx');
 const viewer = read('app/viewer.tsx');
-for (const invariant of ['TextInput', 'saveDeviceName', 'useNotificationPermission', "useKeepAwake('chirp-sharer')"]) {
-  if (!home.includes(invariant)) fail(`home release UX invariant missing: ${invariant}`);
+for (const invariant of ['TextInput', 'saveDeviceName', 'useNotificationPermission', "useKeepAwake('chirp-sharer')", 'await media.startSharing()']) {
+  if (!home.includes(invariant)) fail(`home release UX/runtime invariant missing: ${invariant}`);
 }
 if (/\bUnknown\b/.test(home)) fail('home must not silently render an unnamed fresh install as Unknown');
 if (!layout.includes('<Stack.Screen name="index" options={{ headerShown: false }}')) fail('home must not render a duplicate Stack header');
