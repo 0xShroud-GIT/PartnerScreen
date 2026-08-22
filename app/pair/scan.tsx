@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { router } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { usePairing } from '../../src/presentation/usePairing';
 
 export default function ScanPairScreen() {
@@ -39,8 +39,12 @@ export default function ScanPairScreen() {
       {permission && !permission.granted ? (
         <View style={styles.card}>
           <Text style={styles.label}>Camera access is needed only to scan the temporary pairing QR.</Text>
-          <Pressable accessibilityRole="button" onPress={() => { void requestPermission(); }} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
-            <Text style={styles.primaryText}>Allow camera</Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => { if (permission.canAskAgain) void requestPermission(); else void Linking.openSettings(); }}
+            style={({ pressed }) => [styles.primary, pressed && styles.pressed]}
+          >
+            <Text style={styles.primaryText}>{permission.canAskAgain ? 'Allow camera' : 'Open camera settings'}</Text>
           </Pressable>
         </View>
       ) : null}
