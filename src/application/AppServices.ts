@@ -93,7 +93,6 @@ pairingService.subscribe(() => {
     }
   }).catch(() => undefined);
 });
-void pairingService.initialize().catch(() => undefined);
 
 export async function recoverFromError(): Promise<void> {
   await mediaSession.stop();

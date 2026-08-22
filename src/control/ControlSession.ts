@@ -74,7 +74,6 @@ export class ControlSession {
       this.context = { ...context, pairSecretHex: context.pairSecretHex.toLowerCase() };
       await this.crypto.assertRuntimeCompatible();
       await this.transport.startTrustedPresence?.().catch(() => undefined);
-      await this.ensureListeningNow();
     });
   }
 

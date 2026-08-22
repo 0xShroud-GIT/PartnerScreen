@@ -110,9 +110,12 @@ for (const invariant of ['peerTransportDisposition', "connectionState === 'faile
 const home = read('app/index.tsx');
 const layout = read('app/_layout.tsx');
 const viewer = read('app/viewer.tsx');
-for (const invariant of ['TextInput', 'saveDeviceName', 'useNotificationPermission', "useKeepAwake('chirp-sharer')", 'await media.startSharing()']) {
+const sessionHook = read('src/presentation/useSession.ts');
+for (const invariant of ['TextInput', 'saveDeviceName', 'useNotificationPermission', "useKeepAwake('chirp-sharer')", 'await session.acceptRequest()']) {
   if (!home.includes(invariant)) fail(`home release UX/runtime invariant missing: ${invariant}`);
 }
+if (home.includes('await media.startSharing()')) fail('home must not duplicate screen-capture startup owned by useSession.acceptRequest');
+if (!sessionHook.includes('await appServices.mediaSession.startSharing()')) fail('useSession.acceptRequest must remain the single screen-capture startup owner');
 if (/\bUnknown\b/.test(home)) fail('home must not silently render an unnamed fresh install as Unknown');
 if (!layout.includes('<Stack.Screen name="index" options={{ headerShown: false }}')) fail('home must not render a duplicate Stack header');
 if (!viewer.includes("useKeepAwake('chirp-viewer')")) fail('active viewer must hold bounded Expo keep-awake ownership');

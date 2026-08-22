@@ -111,9 +111,9 @@ export class SessionController {
     return this.enqueue(async () => {
       const current = this.state;
       if (current.type !== 'IncomingRequest') return;
+      await this.control.send('ACCEPT_SCREEN', {});
       this.clearTimeout();
       await this.pendingStore.clear().catch(() => undefined);
-      await this.control.send('ACCEPT_SCREEN', {});
       this.setState({ type: 'Connected', pair: current.pair, sessionId: current.sessionId, role: 'sharer' });
       await this.record('session_accepted');
       await this.record('session_connected');

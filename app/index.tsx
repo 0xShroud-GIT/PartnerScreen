@@ -91,7 +91,6 @@ export default function Home() {
     setActionError(null);
     try {
       await session.acceptRequest();
-      await media.startSharing();
     } catch {
       if (expectedSessionId) await session.endSession(expectedSessionId).catch(() => undefined);
       setActionError('Chirp could not start screen sharing. Check Diagnostics and try the request again.');
