@@ -60,11 +60,14 @@ for (const marker of [
   'rendererFirstFrame',
   'rendererEpoch',
   'rendererTrackState?.trackEpoch',
-  'key={`${requesterSessionId}:${rendererEpoch}`}',
+  'rendererMountEpoch',
+  'lastRenderedEpoch',
+  'trackEpoch={rendererEpoch}',
+  'key={`${requesterSessionId}:${rendererMountEpoch}`}',
   "BackHandler.addEventListener('hardwareBackPress'",
   'void stopSession()',
 ]) requireMarker(viewer, marker, 'app/viewer.tsx');
-for (const marker of ['ScrollView', 'aspectRatio: 9 / 16', 'borderRadius: 10, overflow: \'hidden\'']) forbid(viewer, marker, 'app/viewer.tsx');
+for (const marker of ['ScrollView', 'aspectRatio: 9 / 16', 'borderRadius: 10, overflow: \'hidden\'', 'key={`${requesterSessionId}:${rendererEpoch}`}']) forbid(viewer, marker, 'app/viewer.tsx');
 
 const layout = read('app/_layout.tsx');
 for (const marker of ['name="viewer"', 'headerShown: false']) requireMarker(layout, marker, 'app/_layout.tsx');
