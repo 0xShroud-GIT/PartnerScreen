@@ -83,15 +83,17 @@ for (const invariant of [
   'parameters.degradationPreference = patch.degradationPreference',
   'senderBitrateParameters(',
   "(track as unknown as EndedAwareTrack).onended = null",
+  'const stream = event.streams?.[0]',
   '(next.framesDecoded ?? 0) > 0',
   'getStatsSnapshot',
 ]) {
   if (!mediaSession.includes(invariant)) fail(`media recovery/observability invariant missing: ${invariant}`);
 }
-for (const forbidden of ['MEDIA_KEYFRAME_REQUEST', 'MEDIA_KEYFRAME_TOGGLE_MS', 'scheduleKeyframeRecovery', 'forceKeyframe(']) {
-  if (mediaSession.includes(forbidden)) fail(`MediaProjection-unsafe keyframe workaround returned: ${forbidden}`);
+for (const forbidden of ['MEDIA_KEYFRAME_REQUEST', 'MEDIA_KEYFRAME_TOGGLE_MS', 'scheduleKeyframeRecovery', 'forceKeyframe(', 'new MediaStream([event.track])']) {
+  if (mediaSession.includes(forbidden)) fail(`MediaProjection/New-Architecture-unsafe media workaround returned: ${forbidden}`);
 }
 if (/\.enabled\s*=\s*false/.test(mediaSession)) fail('active screen-capture tracks must never be disabled to manipulate encoder state');
+if (/remoteStream\?\.getTracks\(\)\.forEach\(\(track\) => track\.stop\(\)\)/.test(mediaSession)) fail('remote tracks must be torn down by closing their PeerConnection, not stopped as local capture');
 
 const controlMessage = read('src/protocol/ControlMessage.ts');
 if (controlMessage.includes('MEDIA_KEYFRAME_REQUEST')) fail('control protocol must delegate keyframe feedback to native WebRTC RTCP');
