@@ -17,11 +17,5 @@ function snapshot() {
 }
 
 export function useMediaSession() {
-  const value = useSyncExternalStore(appServices.mediaSession.subscribe, snapshot, snapshot);
-  return {
-    ...value,
-    startSharing: () => appServices.mediaSession.startSharing(),
-    stop: () => appServices.mediaSession.stop(),
-    reconcile: () => appServices.mediaSession.reconcile(),
-  };
+  return useSyncExternalStore(appServices.mediaSession.subscribe, snapshot, snapshot);
 }
