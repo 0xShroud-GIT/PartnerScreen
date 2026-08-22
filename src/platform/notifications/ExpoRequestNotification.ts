@@ -157,12 +157,3 @@ export class ExpoRequestNotification implements RequestNotificationPort {
     this.openedListeners.clear();
   }
 }
-
-export class NoopRequestNotification implements RequestNotificationPort {
-  async showRequestNotification(): Promise<boolean> { return false; }
-  async clearRequestNotification(): Promise<boolean> { return false; }
-  async readPermissionState(): Promise<NotificationPermissionState> { return 'denied'; }
-  async requestPermissionFromForeground(): Promise<NotificationPermissionState> { return 'denied'; }
-  async consumeLaunchSessionId(): Promise<string | null> { return null; }
-  subscribeOpened(): () => void { return () => undefined; }
-}
