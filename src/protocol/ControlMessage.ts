@@ -8,7 +8,6 @@ export type MediaControlMessageType =
   | 'SDP_OFFER'
   | 'SDP_ANSWER'
   | 'ICE_CANDIDATE'
-  | 'MEDIA_KEYFRAME_REQUEST'
   | 'MEDIA_RESTART_REQUEST';
 export type ControlMessageType =
   | 'REQUEST_SCREEN'
@@ -27,7 +26,6 @@ export type DeclineScreenPayload = { reason: 'declined' | 'busy' };
 export type CaptureDeniedPayload = { reason: 'system_denied' | 'notifications_denied' };
 export type SdpPayload = { sdp: string };
 export type IceCandidatePayload = { sdpMid: string; sdpMLineIndex: number; candidate: string };
-export type MediaKeyframeRequestPayload = { reason: 'first_frame' };
 export type MediaRestartRequestPayload = { reason: 'connection_lost' };
 export type SessionEndPayload = { reason: 'user' | 'disconnect' | 'timeout' };
 export type SessionErrorPayload = { reason: 'busy' | 'invalid_transition' | 'timeout' | 'auth_failed' | 'capture_failed' | 'capture_revoked' | 'media_failed' };
@@ -41,7 +39,6 @@ export interface ControlPayloadMap {
   SDP_OFFER: SdpPayload;
   SDP_ANSWER: SdpPayload;
   ICE_CANDIDATE: IceCandidatePayload;
-  MEDIA_KEYFRAME_REQUEST: MediaKeyframeRequestPayload;
   MEDIA_RESTART_REQUEST: MediaRestartRequestPayload;
   SESSION_END: SessionEndPayload;
   SESSION_ERROR: SessionErrorPayload;
@@ -80,7 +77,6 @@ export function isMediaControlMessageType(value: unknown): value is MediaControl
   return value === 'SDP_OFFER' ||
     value === 'SDP_ANSWER' ||
     value === 'ICE_CANDIDATE' ||
-    value === 'MEDIA_KEYFRAME_REQUEST' ||
     value === 'MEDIA_RESTART_REQUEST';
 }
 export function isControlMessageType(value: unknown): value is ControlMessageType {
