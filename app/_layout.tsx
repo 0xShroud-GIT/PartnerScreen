@@ -37,7 +37,7 @@ export default function RootLayout() {
 
   return (
     <>
-      <StatusBar style="light" backgroundColor={BACKGROUND} />
+      <StatusBar style="light" />
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: SURFACE },
