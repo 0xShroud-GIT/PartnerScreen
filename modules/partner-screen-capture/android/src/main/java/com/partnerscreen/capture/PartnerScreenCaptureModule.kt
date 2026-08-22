@@ -28,6 +28,7 @@ class PartnerScreenCaptureModule : Module() {
     View(PartnerRemoteVideoView::class) {
       Events("onFirstFrame", "onFrameResolution")
       Prop("sessionId") { view: PartnerRemoteVideoView, value: String -> view.bindSession(value) }
+      Prop("trackEpoch") { view: PartnerRemoteVideoView, value: Int -> view.bindTrackEpoch(value) }
       OnViewDestroys { view: PartnerRemoteVideoView -> view.release() }
     }
 
