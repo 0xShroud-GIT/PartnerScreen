@@ -23,7 +23,7 @@ export class DiagnosticsRepository {
   private writeQueue: Promise<void> = Promise.resolve();
   private memory: DiagnosticEvent[] = [];
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
-  private loaded = false;
+  private loadPromise: Promise<void> | null = null;
 
   constructor(
     private readonly store: KeyValueStore,
@@ -51,24 +51,29 @@ export class DiagnosticsRepository {
     this.schedulePersist();
   }
 
-  private async ensureLoaded(): Promise<void> {
-    if (this.loaded) return;
+  private ensureLoaded(): Promise<void> {
+    if (!this.loadPromise) this.loadPromise = this.load();
+    return this.loadPromise;
+  }
+
+  private async load(): Promise<void> {
     let raw: string | null;
     try {
       raw = await this.store.getString(DIAGNOSTICS_STORAGE_KEY);
     } catch {
       this.memory = [];
-      this.loaded = true;
       return;
     }
-    if (raw === null) { this.memory = []; this.loaded = true; return; }
+    if (raw === null) {
+      this.memory = [];
+      return;
+    }
     try {
       const parsed = JSON.parse(raw) as unknown;
       if (!Array.isArray(parsed) || !parsed.every(isDiagnosticEvent)) {
         throw new DiagnosticsPersistenceError('Persisted diagnostics are corrupt.');
       }
       this.memory = parsed.slice(-MAX_DIAGNOSTIC_EVENTS);
-      this.loaded = true;
     } catch (error) {
       if (error instanceof DiagnosticsPersistenceError) throw error;
       throw new DiagnosticsPersistenceError('Persisted diagnostics are corrupt.', { cause: error });
