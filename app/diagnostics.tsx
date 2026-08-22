@@ -22,12 +22,15 @@ export default function DiagnosticsScreen() {
     setError(null);
     try {
       const events = await appServices.diagnosticsRepository.list();
+      const media = await appServices.mediaDiagnosticPersistence.snapshotForReport(
+        appServices.mediaSession.getDiagnosticSnapshot(),
+      );
       setReport(buildDiagnosticReport({
         generatedAt: appServices.clock.nowIso(),
         identity,
         events,
         build: getDiagnosticBuildMetadata(),
-        media: appServices.mediaSession.getDiagnosticSnapshot(),
+        media,
       }));
     } catch {
       setError(REPORT_FAILURE);

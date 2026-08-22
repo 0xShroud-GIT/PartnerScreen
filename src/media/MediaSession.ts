@@ -374,10 +374,18 @@ export class MediaSession {
 
     if (disposition === 'disconnected') {
       if (!this.disconnectedTimer) {
-        void this.record('media_degraded');
         this.disconnectedTimer = setTimeout(() => {
           this.disconnectedTimer = null;
-          void this.enqueue(() => this.scheduleRecovery(sessionId, 'peer transport disconnected')).catch(() => undefined);
+          void this.enqueue(async () => {
+            if (this.peer !== peer || this.peerSessionId !== sessionId) return;
+            const currentDisposition = peerTransportDisposition(
+              (peer as any).connectionState as string | undefined,
+              (peer as any).iceConnectionState as string | undefined,
+            );
+            if (currentDisposition !== 'disconnected') return;
+            await this.record('media_degraded');
+            await this.scheduleRecovery(sessionId, 'peer transport disconnected');
+          }).catch(() => undefined);
         }, MEDIA_DISCONNECTED_GRACE_MS);
       }
       this.emit();

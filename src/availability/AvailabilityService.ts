@@ -7,6 +7,7 @@ import type {
   ChirpDiscoveryEvent,
   ResolvedPartnerService,
 } from '../platform/discovery/ChirpDiscovery';
+import type { RuntimeScheduler, RuntimeTimer } from '../runtime/RuntimeScheduler';
 
 export type AvailabilitySnapshot =
   | { kind: 'inactive' }
@@ -40,6 +41,7 @@ const SAFE_START_MESSAGES = new Set([
   'Chirp control listener is unavailable.',
 ]);
 const GENERIC_START_MESSAGE = 'Trusted availability could not start. Check that both phones are on the same Wi-Fi, then retry.';
+export const AVAILABILITY_LEASE_REPROBE_MS = 4_000;
 function safeAvailabilityStartMessage(error: unknown): string {
   if (error instanceof Error && SAFE_START_MESSAGES.has(error.message)) return error.message;
   return GENERIC_START_MESSAGE;
@@ -53,6 +55,7 @@ export class AvailabilityService {
   private probeGeneration = 0;
   private active: ActiveAvailability | null = null;
   private lastPair: PairTrustMetadata | null = null;
+  private leaseTimer: RuntimeTimer | null = null;
   private readonly unsubscribeDiscovery: () => void;
   private readonly unsubscribeControlListener: () => void;
 
@@ -62,6 +65,7 @@ export class AvailabilityService {
     private readonly discovery: ChirpDiscovery,
     private readonly authenticator: HmacDiscoveryAuthenticator,
     private readonly controlListener: ControlListenerSource,
+    private readonly scheduler?: RuntimeScheduler,
   ) {
     this.unsubscribeDiscovery = this.discovery.subscribe((event) => { void this.enqueue(() => this.handleDiscoveryEvent(event)).catch(() => undefined); });
     // When the local control listener is replaced/invalidated, the advertisement's authenticated
@@ -77,8 +81,21 @@ export class AvailabilityService {
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   activate(pair: PairTrustMetadata): Promise<void> { this.lastPair = pair; return this.enqueue(() => this.activateNow(pair)); }
   retry(): Promise<void> { const pair = this.lastPair; return pair ? this.enqueue(() => this.activateNow(pair, true)) : Promise.resolve(); }
+  markPartnerUnreachable(endpoint: { host: string; port: number }): Promise<void> {
+    return this.enqueue(async () => {
+      const active = this.active;
+      if (!active || this.state.kind !== 'available') return;
+      if (this.state.endpoint.host !== endpoint.host || this.state.endpoint.port !== endpoint.port) return;
+      this.clearLeaseTimer();
+      this.probeGeneration += 1;
+      active.matchedServiceName = null;
+      active.provenControl = null;
+      this.setState({ kind: 'offline', pair: active.pair, localAdvertised: true });
+      await this.record('availability_probe_failed');
+    });
+  }
   deactivate(): Promise<void> { this.lastPair = null; return this.enqueue(async () => { await this.stopActive(true); this.setState({ kind: 'inactive' }); }); }
-  dispose(): void { this.unsubscribeDiscovery(); this.unsubscribeControlListener(); void this.discovery.stop().catch(() => undefined); }
+  dispose(): void { this.clearLeaseTimer(); this.unsubscribeDiscovery(); this.unsubscribeControlListener(); void this.discovery.stop().catch(() => undefined); }
 
   private enqueue(operation: () => Promise<void>): Promise<void> {
     const result = this.operationQueue.then(operation);
@@ -117,6 +134,7 @@ export class AvailabilityService {
 
   private async stopActive(recordStop: boolean): Promise<void> {
     const hadActive = this.active !== null;
+    this.clearLeaseTimer();
     this.generation += 1;
     this.probeGeneration += 1;
     this.active = null;
@@ -130,6 +148,7 @@ export class AvailabilityService {
     if (event.type === 'service_resolved') { await this.handleResolved(active, event.service); return; }
     if (event.type === 'service_lost') {
       if (active.matchedServiceName !== event.serviceName) return;
+      this.clearLeaseTimer();
       this.probeGeneration += 1;
       active.matchedServiceName = null;
       active.provenControl = null;
@@ -137,6 +156,7 @@ export class AvailabilityService {
       await this.record('availability_partner_lost');
       return;
     }
+    this.clearLeaseTimer();
     this.probeGeneration += 1;
     active.matchedServiceName = null;
     active.provenControl = null;
@@ -207,8 +227,44 @@ export class AvailabilityService {
       current.matchedServiceName = service.serviceName;
       current.provenControl = { host: service.host, port: controlPort };
       this.setState({ kind: 'available', pair: current.pair, endpoint: { host: service.host, port: controlPort }, serviceName: service.serviceName });
+      this.schedulePartnerLease(current);
       if (changed) await this.record('availability_partner_found');
     }).catch(() => undefined);
+  }
+
+  private schedulePartnerLease(active: ActiveAvailability): void {
+    if (!this.scheduler || !active.provenControl) return;
+    this.clearLeaseTimer();
+    const generation = active.generation;
+    const endpoint = { ...active.provenControl };
+    this.leaseTimer = this.scheduler.schedule(AVAILABILITY_LEASE_REPROBE_MS, () => {
+      this.leaseTimer = null;
+      void this.enqueue(() => this.reprobePartnerLease(generation, endpoint)).catch(() => undefined);
+    });
+  }
+
+  private async reprobePartnerLease(generation: number, endpoint: { host: string; port: number }): Promise<void> {
+    const active = this.active;
+    if (!active || active.generation !== generation || this.state.kind !== 'available') return;
+    if (this.state.endpoint.host !== endpoint.host || this.state.endpoint.port !== endpoint.port) return;
+    try {
+      await this.discovery.probe(endpoint.host, endpoint.port);
+    } catch {
+      if (!this.active || this.active.generation !== generation || this.state.kind !== 'available') return;
+      this.probeGeneration += 1;
+      active.matchedServiceName = null;
+      active.provenControl = null;
+      this.setState({ kind: 'offline', pair: active.pair, localAdvertised: true });
+      await this.record('availability_probe_failed');
+      return;
+    }
+    if (!this.active || this.active.generation !== generation || this.state.kind !== 'available') return;
+    this.schedulePartnerLease(active);
+  }
+
+  private clearLeaseTimer(): void {
+    this.leaseTimer?.cancel();
+    this.leaseTimer = null;
   }
 
   private async record(kind: DiagnosticEventKind): Promise<void> { try { await this.diagnostics.append(kind); } catch { /* diagnostics never own availability */ } }
