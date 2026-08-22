@@ -70,6 +70,7 @@ for (const invariant of [
   'MEDIA_KEYFRAME_REQUEST_DELAYS_MS',
   'MEDIA_KEYFRAME_STEADY_RETRY_MS = 5_000',
   'MEDIA_SIGNAL_RETRY_MS = 1_000',
+  "degradationPreference: 'maintain-resolution'",
 ]) {
   if (!mediaPolicy.includes(invariant)) fail(`media policy invariant missing: ${invariant}`);
 }
@@ -79,7 +80,8 @@ for (const invariant of [
   "sendMedia(sessionId, 'MEDIA_KEYFRAME_REQUEST'",
   'MEDIA_KEYFRAME_STEADY_RETRY_MS',
   'createOffer(iceRestart ? { iceRestart: true } : undefined)',
-  "parameters.degradationPreference = 'maintain-resolution'",
+  'parameters.degradationPreference = patch.degradationPreference',
+  'senderBitrateParameters(',
   'await this.forceKeyframe(sessionId);',
   "(track as unknown as EndedAwareTrack).onended = null",
   "this.peer?.connectionState === 'connected'",
