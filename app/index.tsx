@@ -66,6 +66,7 @@ export default function Home() {
   const notifications = useNotificationPermission();
   const [deviceName, setDeviceName] = useState('');
   const [editingName, setEditingName] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const sessionState = session.state;
 
   useEffect(() => {
@@ -86,8 +87,15 @@ export default function Home() {
   };
 
   const acceptAndStartSharing = async () => {
-    await session.acceptRequest();
-    await media.startSharing();
+    const expectedSessionId = sessionState.type === 'IncomingRequest' ? sessionState.sessionId : null;
+    setActionError(null);
+    try {
+      await session.acceptRequest();
+      await media.startSharing();
+    } catch {
+      if (expectedSessionId) await session.endSession(expectedSessionId).catch(() => undefined);
+      setActionError('Chirp could not start screen sharing. Check Diagnostics and try the request again.');
+    }
   };
 
   return (
@@ -176,9 +184,10 @@ export default function Home() {
                     <Text style={styles.status}>{availabilityText(availability.state.kind)}</Text>
                   </View>
                   {availability.state.kind === 'offline' && availability.state.message ? <Text style={styles.error}>{availability.state.message}</Text> : null}
+                  {actionError ? <Text accessibilityRole="alert" style={styles.error}>{actionError}</Text> : null}
 
-                  {sessionState.type === 'PairedAvailable' ? <Button label="View their screen" onPress={() => { void session.requestScreen(); }} /> : null}
-                  {sessionState.type === 'PairedOffline' ? <Button label="Retry discovery" secondary onPress={() => { void availability.retry(); }} /> : null}
+                  {sessionState.type === 'PairedAvailable' ? <Button label="View their screen" onPress={() => { setActionError(null); void session.requestScreen(); }} /> : null}
+                  {sessionState.type === 'PairedOffline' ? <Button label="Retry discovery" secondary onPress={() => { setActionError(null); void availability.retry(); }} /> : null}
                   {sessionState.type === 'OutgoingRequest' ? (
                     <View style={styles.actions}>
                       <Text style={styles.body}>Waiting for {pair.partnerDeviceName} to accept…</Text>
@@ -209,7 +218,7 @@ export default function Home() {
                   {sessionState.type === 'Error' ? (
                     <View style={styles.actions}>
                       <Text accessibilityRole="alert" style={styles.error}>{sessionState.message}</Text>
-                      <Button label="Recover" onPress={() => { void session.recover(); }} />
+                      <Button label="Recover" onPress={() => { setActionError(null); void session.recover(); }} />
                     </View>
                   ) : null}
 
@@ -222,6 +231,7 @@ export default function Home() {
                     <Text style={styles.label}>Request alerts</Text>
                     <Text style={styles.sectionTitle}>Don't miss a screen request</Text>
                     <Text style={styles.body}>Allow Chirp notifications so this trusted phone can alert you when a request arrives while Chirp is in the background.</Text>
+                    {notifications.error ? <Text accessibilityRole="alert" style={styles.error}>{notifications.error}</Text> : null}
                     {notifications.state === 'denied' || notifications.state === 'channel_disabled' ? (
                       <Button label="Open notification settings" secondary onPress={() => { void Linking.openSettings(); }} />
                     ) : (
