@@ -94,7 +94,8 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 function peerTransportConnected(peer: RTCPeerConnection): boolean {
-  return peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed';
+  return (peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed') &&
+    peer.connectionState === 'connected';
 }
 
 export class MediaSession {
@@ -311,16 +312,6 @@ export class MediaSession {
     const iceState = peer.iceConnectionState;
     const connectionState = peer.connectionState;
 
-    if (peerTransportConnected(peer) && connectionState !== 'failed') {
-      this.clearDisconnectedTimer();
-      const recovered = this.restartAttempt > 0;
-      this.restartAttempt = 0;
-      if (role === 'requester' && !this.firstFrameSeen) this.setState({ type: 'connecting', sessionId, role });
-      else this.setState({ type: 'live', sessionId, role });
-      if (recovered) void this.record('media_reconnected');
-      return;
-    }
-
     if (iceState === 'failed' || connectionState === 'failed') {
       this.clearDisconnectedTimer();
       this.emit();
@@ -337,6 +328,16 @@ export class MediaSession {
         }, MEDIA_DISCONNECTED_GRACE_MS);
       }
       this.emit();
+      return;
+    }
+
+    if (peerTransportConnected(peer)) {
+      this.clearDisconnectedTimer();
+      const recovered = this.restartAttempt > 0;
+      this.restartAttempt = 0;
+      if (role === 'requester' && !this.firstFrameSeen) this.setState({ type: 'connecting', sessionId, role });
+      else this.setState({ type: 'live', sessionId, role });
+      if (recovered) void this.record('media_reconnected');
       return;
     }
 
@@ -396,6 +397,8 @@ export class MediaSession {
         await peer.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: message.payload.sdp }));
         await this.flushRemoteCandidates(peer);
       }
+      // MEDIA_KEYFRAME_REQUEST is a retired protocol-v1 compatibility frame. It intentionally falls
+      // through as an authenticated no-op; native libwebrtc owns PLI/FIR/keyframe recovery.
     } catch {
       await this.scheduleRecovery(sessionId);
     }
