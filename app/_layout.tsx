@@ -1,10 +1,8 @@
 import { useEffect } from 'react';
-import { AppState } from 'react-native';
 import * as Linking from 'expo-linking';
 import { Stack, router } from 'expo-router';
 import { appServices } from '../src/application/AppServices';
-import { IncomingRequestIngress } from '../src/request/incomingRequestRoute';
-import { parseIncomingRequestSessionId } from '../src/request/incomingRequestRoute';
+import { IncomingRequestIngress, parseIncomingRequestSessionId } from '../src/request/incomingRequestRoute';
 
 const incomingIngress = new IncomingRequestIngress();
 
@@ -20,23 +18,15 @@ export default function RootLayout() {
   useEffect(() => {
     void appServices.diagnosticsRepository.append('app_started').catch(() => undefined);
     void appServices.pairingService.initialize();
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void appServices.diagnosticsRepository.append('app_foregrounded').catch(() => undefined);
-      if (state === 'background') void appServices.diagnosticsRepository.append('app_backgrounded').catch(() => undefined);
-    });
-    // All cold/warm ingress mechanisms converge into the same deduping authority.
+
     void Linking.getInitialURL().then(routeIncomingRequestUrl).catch(() => undefined);
-    const linkingSub = Linking.addEventListener('url', (event) => {
-      routeIncomingRequestUrl(event.url);
-    });
-    void appServices.requestNotificationPort.consumeLaunchSessionId().then((sessionId) => {
-      routeIncomingRequest(sessionId);
-    }).catch(() => undefined);
-    const unsubOpened = appServices.requestNotificationPort.subscribeOpened((sessionId) => {
-      routeIncomingRequest(sessionId);
-    });
+    const linkingSub = Linking.addEventListener('url', (event) => routeIncomingRequestUrl(event.url));
+    void appServices.requestNotificationPort.consumeLaunchSessionId()
+      .then(routeIncomingRequest)
+      .catch(() => undefined);
+    const unsubOpened = appServices.requestNotificationPort.subscribeOpened(routeIncomingRequest);
+
     return () => {
-      sub.remove();
       linkingSub.remove();
       unsubOpened();
     };

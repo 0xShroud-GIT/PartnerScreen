@@ -3,29 +3,15 @@ import { router } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { usePairing } from '../../src/presentation/usePairing';
-import { consumeRuntimeLabPairingQr } from '../../src/runtime/RuntimeLabPairingInput';
-import { runtimeLabPairingCameraSubstituteEnabled } from '../../src/runtime/RuntimeLabFlags';
 
 export default function ScanPairScreen() {
   const pairing = usePairing();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanLocked, setScanLocked] = useState(false);
-  const runtimeLabInput = runtimeLabPairingCameraSubstituteEnabled();
 
   useEffect(() => {
     if (pairing.state.kind === 'paired') router.replace('/');
   }, [pairing.state.kind]);
-
-  useEffect(() => {
-    if (!runtimeLabInput || pairing.state.kind !== 'unpaired' || scanLocked) return;
-    let cancelled = false;
-    void consumeRuntimeLabPairingQr().then((payload) => {
-      if (cancelled || !payload) return;
-      setScanLocked(true);
-      void pairing.startScanner(payload).catch(() => undefined);
-    });
-    return () => { cancelled = true; };
-  }, [runtimeLabInput, pairing.state.kind, scanLocked]);
 
   const cancel = async () => {
     try {
@@ -49,16 +35,8 @@ export default function ScanPairScreen() {
       <Text accessibilityRole="header" style={styles.title}>Scan partner QR</Text>
       <Text style={styles.help}>Only scan a QR shown inside Chirp on the phone you intend to trust.</Text>
 
-      {runtimeLabInput && scanning ? (
-        <View style={styles.card}>
-          <ActivityIndicator />
-          <Text style={styles.label}>Runtime Lab pairing input ready</Text>
-          <Text style={styles.help}>Waiting for the emulator runner to provide the creator's real one-time QR payload. Normal Chirp authentication and confirmation still apply.</Text>
-        </View>
-      ) : null}
-
-      {!runtimeLabInput && !permission ? <ActivityIndicator /> : null}
-      {!runtimeLabInput && permission && !permission.granted ? (
+      {!permission ? <ActivityIndicator /> : null}
+      {permission && !permission.granted ? (
         <View style={styles.card}>
           <Text style={styles.label}>Camera permission is needed only to scan the pairing QR.</Text>
           <Pressable accessibilityRole="button" onPress={() => { void requestPermission(); }} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
@@ -67,7 +45,7 @@ export default function ScanPairScreen() {
         </View>
       ) : null}
 
-      {!runtimeLabInput && permission?.granted && scanning ? (
+      {permission?.granted && scanning ? (
         <View style={styles.cameraFrame}>
           <CameraView
             barcodeScannerSettings={{ barcodeTypes: ['qr'] }}

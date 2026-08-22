@@ -32,32 +32,32 @@ export type MediaState =
 
 export interface MediaStatsSnapshot {
   atMs: number;
-  sendBitrateBps?: number;
-  receiveBitrateBps?: number;
-  framesPerSecond?: number;
-  frameWidth?: number;
-  frameHeight?: number;
-  framesEncoded?: number;
-  framesDecoded?: number;
-  framesDropped?: number;
-  keyFramesEncoded?: number;
-  keyFramesDecoded?: number;
-  nackCount?: number;
-  pliCount?: number;
-  firCount?: number;
-  packetsLost?: number;
-  jitterMs?: number;
-  roundTripTimeMs?: number;
-  candidatePairState?: string;
-  codecMimeType?: string;
-  encoderImplementation?: string;
-  decoderImplementation?: string;
-  qualityLimitationReason?: string;
+  sendBitrateBps?: number | undefined;
+  receiveBitrateBps?: number | undefined;
+  framesPerSecond?: number | undefined;
+  frameWidth?: number | undefined;
+  frameHeight?: number | undefined;
+  framesEncoded?: number | undefined;
+  framesDecoded?: number | undefined;
+  framesDropped?: number | undefined;
+  keyFramesEncoded?: number | undefined;
+  keyFramesDecoded?: number | undefined;
+  nackCount?: number | undefined;
+  pliCount?: number | undefined;
+  firCount?: number | undefined;
+  packetsLost?: number | undefined;
+  jitterMs?: number | undefined;
+  roundTripTimeMs?: number | undefined;
+  candidatePairState?: string | undefined;
+  codecMimeType?: string | undefined;
+  encoderImplementation?: string | undefined;
+  decoderImplementation?: string | undefined;
+  qualityLimitationReason?: string | undefined;
 }
 
 export interface MediaDiagnosticSnapshot {
   state: MediaState['type'];
-  role?: 'requester' | 'sharer';
+  role?: 'requester' | 'sharer' | undefined;
   remoteTrackSeen: boolean;
   firstFrameSeen: boolean;
   acceptedLocalCandidates: number;
@@ -232,7 +232,6 @@ export class MediaSession {
       if (this.peer || this.localStream || this.remoteStream) await this.resetMedia(true);
       return;
     }
-
     if (product.role === 'requester') {
       if (this.peerSessionId !== product.sessionId || this.role !== 'requester') {
         await this.resetMedia(false);
@@ -245,42 +244,35 @@ export class MediaSession {
       }
       return;
     }
-
     if (this.peerSessionId && this.peerSessionId !== product.sessionId) await this.resetMedia(false);
   }
 
   private createPeer(sessionId: string, role: 'requester' | 'sharer'): RTCPeerConnection {
     if (this.peer && this.peerSessionId === sessionId && this.role === role) return this.peer;
     if (this.peer) this.closePeer();
-
     this.peerSessionId = sessionId;
     this.role = role;
     this.pendingRemoteCandidates = [];
     const peer = new RTCPeerConnection({ iceServers: [] });
     this.peer = peer;
 
-    peer.onicecandidate = (event) => {
+    peer.onicecandidate = (event: any) => {
       const candidate = event.candidate;
       if (!candidate?.candidate || this.peerSessionId !== sessionId) return;
       const decision = classifyIceCandidate(candidate.candidate);
-      if (!decision.accepted) {
-        this.rejectedLocalCandidates += 1;
-        this.emit();
-        return;
-      }
+      if (!decision.accepted) { this.rejectedLocalCandidates += 1; this.emit(); return; }
       this.acceptedLocalCandidates += 1;
       this.emit();
       void this.session.sendMedia(sessionId, 'ICE_CANDIDATE', {
-        sdpMid: candidate.sdpMid ?? '0',
-        sdpMLineIndex: candidate.sdpMLineIndex ?? 0,
-        candidate: candidate.candidate,
+        sdpMid: candidate.sdpMid ?? '0', sdpMLineIndex: candidate.sdpMLineIndex ?? 0, candidate: candidate.candidate,
       }).catch(() => undefined);
     };
 
-    peer.ontrack = (event) => {
+    peer.ontrack = (event: any) => {
       if (role !== 'requester' || this.peerSessionId !== sessionId || event.track.kind !== 'video') return;
-      this.remoteStream = event.streams?.[0] ?? new MediaStream([event.track]);
-      this.remoteStreamURL = this.remoteStream.toURL();
+      const stream = event.streams?.[0] ?? new MediaStream([event.track]);
+      this.remoteStream = stream;
+      this.remoteStreamURL = stream.toURL();
       if (!this.remoteTrackSeen) void this.record('media_remote_track');
       this.remoteTrackSeen = true;
       this.scheduleKeyframeRecovery(sessionId);
@@ -314,7 +306,6 @@ export class MediaSession {
         void this.enqueue(() => this.scheduleRecovery(sessionId)).catch(() => undefined);
       }
     };
-
     return peer;
   }
 
@@ -346,36 +337,22 @@ export class MediaSession {
     const product = this.session.getSnapshot();
     if (product.type !== 'Connected' || product.sessionId !== message.sessionId) return;
     const sessionId = product.sessionId;
-
     try {
-      if (message.type === 'MEDIA_KEYFRAME_REQUEST') {
-        if (product.role === 'sharer') await this.forceKeyframe(sessionId);
-        return;
-      }
-      if (message.type === 'MEDIA_RESTART_REQUEST') {
-        if (product.role === 'sharer') await this.restartAsSharer(sessionId);
-        return;
-      }
+      if (message.type === 'MEDIA_KEYFRAME_REQUEST') { if (product.role === 'sharer') await this.forceKeyframe(sessionId); return; }
+      if (message.type === 'MEDIA_RESTART_REQUEST') { if (product.role === 'sharer') await this.restartAsSharer(sessionId); return; }
       if (message.type === 'ICE_CANDIDATE') {
         const decision = classifyIceCandidate(message.payload.candidate);
-        if (!decision.accepted) {
-          this.rejectedRemoteCandidates += 1;
-          this.emit();
-          return;
-        }
+        if (!decision.accepted) { this.rejectedRemoteCandidates += 1; this.emit(); return; }
         this.acceptedRemoteCandidates += 1;
         const candidate = new RTCIceCandidate(message.payload);
         const peer = this.requirePeer(sessionId);
-        if (!peer.remoteDescription) this.pendingRemoteCandidates.push(candidate);
-        else await peer.addIceCandidate(candidate);
+        if (!peer.remoteDescription) this.pendingRemoteCandidates.push(candidate); else await peer.addIceCandidate(candidate);
         this.emit();
         return;
       }
       if (message.type === 'SDP_OFFER') {
         if (product.role !== 'requester') throw new Error('Only requester accepts a media offer.');
-        const peer = this.peerSessionId === sessionId && this.role === 'requester'
-          ? this.requirePeer(sessionId)
-          : this.createPeer(sessionId, 'requester');
+        const peer = this.peerSessionId === sessionId && this.role === 'requester' ? this.requirePeer(sessionId) : this.createPeer(sessionId, 'requester');
         if (peer.getTransceivers().length === 0) peer.addTransceiver('video', { direction: 'recvonly' });
         await peer.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: message.payload.sdp }));
         await this.flushRemoteCandidates(peer);
@@ -409,10 +386,9 @@ export class MediaSession {
   }
 
   private scheduleKeyframeRecovery(sessionId: string): void {
-    if (this.firstFrameSeen || this.keyframeTimer || this.role !== 'requester' || this.peerSessionId !== sessionId) return;
+    if (!sessionId || this.firstFrameSeen || this.keyframeTimer || this.role !== 'requester' || this.peerSessionId !== sessionId) return;
     if (this.keyframeAttempt >= MEDIA_KEYFRAME_REQUEST_DELAYS_MS.length) {
-      const peer = this.peer;
-      if (peer?.connectionState === 'connected') void this.enqueue(() => this.scheduleRecovery(sessionId)).catch(() => undefined);
+      if (this.peer?.connectionState === 'connected') void this.enqueue(() => this.scheduleRecovery(sessionId)).catch(() => undefined);
       return;
     }
     const delay = MEDIA_KEYFRAME_REQUEST_DELAYS_MS[this.keyframeAttempt];
@@ -440,11 +416,7 @@ export class MediaSession {
   private async scheduleRecovery(sessionId: string): Promise<void> {
     const product = this.session.getSnapshot();
     if (product.type !== 'Connected' || product.sessionId !== sessionId || this.restartTimer) return;
-    if (this.restartAttempt >= MEDIA_RESTART_DELAYS_MS.length) {
-      await this.fail(sessionId, 'The Wi-Fi video connection could not recover.', 'media_failed');
-      return;
-    }
-
+    if (this.restartAttempt >= MEDIA_RESTART_DELAYS_MS.length) { await this.fail(sessionId, 'The Wi-Fi video connection could not recover.', 'media_failed'); return; }
     const attempt = this.restartAttempt + 1;
     const delay = MEDIA_RESTART_DELAYS_MS[this.restartAttempt];
     this.restartAttempt = attempt;
@@ -458,9 +430,7 @@ export class MediaSession {
         try {
           if (current.role === 'sharer') await this.restartAsSharer(sessionId);
           else await this.session.sendMedia(sessionId, 'MEDIA_RESTART_REQUEST', { reason: 'connection_lost' });
-        } catch {
-          await this.scheduleRecovery(sessionId);
-        }
+        } catch { await this.scheduleRecovery(sessionId); }
       }).catch(() => undefined);
     }, delay);
   }
@@ -488,11 +458,8 @@ export class MediaSession {
     const next: MediaStatsSnapshot = { atMs: now };
     let sentBytes: number | undefined;
     let receivedBytes: number | undefined;
-
     report.forEach((item: any) => {
-      if (item.type === 'codec' && typeof item.mimeType === 'string' && item.mimeType.toLowerCase().startsWith('video/')) {
-        next.codecMimeType ??= item.mimeType;
-      }
+      if (item.type === 'codec' && typeof item.mimeType === 'string' && item.mimeType.toLowerCase().startsWith('video/')) next.codecMimeType ??= item.mimeType;
       if (item.type === 'outbound-rtp' && (item.kind === 'video' || item.mediaType === 'video') && !item.isRemote) {
         sentBytes = numeric(item.bytesSent);
         next.framesPerSecond = numeric(item.framesPerSecond) ?? next.framesPerSecond;
@@ -519,40 +486,29 @@ export class MediaSession {
         next.firCount = numeric(item.firCount) ?? next.firCount;
         next.decoderImplementation = text(item.decoderImplementation);
         next.packetsLost = numeric(item.packetsLost);
-        const jitter = numeric(item.jitter);
-        if (jitter !== undefined) next.jitterMs = jitter * 1_000;
+        const jitter = numeric(item.jitter); if (jitter !== undefined) next.jitterMs = jitter * 1_000;
       }
       if (item.type === 'candidate-pair' && item.state === 'succeeded' && (item.nominated || item.selected)) {
         next.candidatePairState = text(item.state);
-        const rtt = numeric(item.currentRoundTripTime);
-        if (rtt !== undefined) next.roundTripTimeMs = rtt * 1_000;
+        const rtt = numeric(item.currentRoundTripTime); if (rtt !== undefined) next.roundTripTimeMs = rtt * 1_000;
       }
       if (item.type === 'remote-inbound-rtp' && (item.kind === 'video' || item.mediaType === 'video')) {
-        const rtt = numeric(item.roundTripTime);
-        if (rtt !== undefined) next.roundTripTimeMs = rtt * 1_000;
+        const rtt = numeric(item.roundTripTime); if (rtt !== undefined) next.roundTripTimeMs = rtt * 1_000;
       }
     });
-
     if (sentBytes !== undefined) {
-      if (this.previousSent && now > this.previousSent.atMs && sentBytes >= this.previousSent.bytes) {
-        next.sendBitrateBps = ((sentBytes - this.previousSent.bytes) * 8_000) / (now - this.previousSent.atMs);
-      }
+      if (this.previousSent && now > this.previousSent.atMs && sentBytes >= this.previousSent.bytes) next.sendBitrateBps = ((sentBytes - this.previousSent.bytes) * 8_000) / (now - this.previousSent.atMs);
       this.previousSent = { atMs: now, bytes: sentBytes };
     }
     if (receivedBytes !== undefined) {
-      if (this.previousReceived && now > this.previousReceived.atMs && receivedBytes >= this.previousReceived.bytes) {
-        next.receiveBitrateBps = ((receivedBytes - this.previousReceived.bytes) * 8_000) / (now - this.previousReceived.atMs);
-      }
+      if (this.previousReceived && now > this.previousReceived.atMs && receivedBytes >= this.previousReceived.bytes) next.receiveBitrateBps = ((receivedBytes - this.previousReceived.bytes) * 8_000) / (now - this.previousReceived.atMs);
       this.previousReceived = { atMs: now, bytes: receivedBytes };
     }
-
     this.stats = next;
     if (!this.firstFrameSeen && this.role === 'requester' && (next.framesDecoded ?? 0) > 0) {
-      this.firstFrameSeen = true;
-      this.clearKeyframeTimer();
-      await this.record('media_first_frame');
-    } else if (!this.firstFrameSeen && this.role === 'requester' && this.remoteTrackSeen) {
-      this.scheduleKeyframeRecovery(this.peerSessionId ?? '');
+      this.firstFrameSeen = true; this.clearKeyframeTimer(); await this.record('media_first_frame');
+    } else if (!this.firstFrameSeen && this.role === 'requester' && this.remoteTrackSeen && this.peerSessionId) {
+      this.scheduleKeyframeRecovery(this.peerSessionId);
     }
     await this.record('media_stats');
     this.emit();
@@ -561,78 +517,36 @@ export class MediaSession {
   private async fail(sessionId: string, message: string, reason: 'capture_failed' | 'media_failed'): Promise<void> {
     this.setState({ type: 'error', sessionId, message });
     await this.record(reason === 'capture_failed' ? 'capture_failed' : 'media_failed');
-    if (reason === 'capture_failed') await this.session.captureFailed(sessionId, 'capture_failed');
-    else await this.session.mediaFailed(sessionId);
+    if (reason === 'capture_failed') await this.session.captureFailed(sessionId, 'capture_failed'); else await this.session.mediaFailed(sessionId);
     await this.resetMedia(false);
   }
 
   private async resetMedia(recordCaptureStop: boolean): Promise<void> {
-    this.clearDisconnectedTimer();
-    this.clearKeyframeTimer();
-    if (this.restartTimer) clearTimeout(this.restartTimer);
-    if (this.statsTimer) clearTimeout(this.statsTimer);
-    this.restartTimer = null;
-    this.statsTimer = null;
+    this.clearDisconnectedTimer(); this.clearKeyframeTimer();
+    if (this.restartTimer) clearTimeout(this.restartTimer); if (this.statsTimer) clearTimeout(this.statsTimer);
+    this.restartTimer = null; this.statsTimer = null;
     const hadCapture = Boolean(this.localStream);
-    this.localStream?.getTracks().forEach((track) => track.stop());
-    this.localStream = null;
-    this.remoteStream?.getTracks().forEach((track) => track.stop());
-    this.remoteStream = null;
-    this.remoteStreamURL = null;
-    this.closePeer();
-    this.peerSessionId = null;
-    this.role = null;
-    this.pendingRemoteCandidates = [];
-    this.restartAttempt = 0;
-    this.keyframeAttempt = 0;
-    this.keyframeRequests = 0;
-    this.keyframeForces = 0;
-    this.bitrateParametersApplied = false;
-    this.remoteTrackSeen = false;
-    this.firstFrameSeen = false;
-    this.acceptedLocalCandidates = 0;
-    this.rejectedLocalCandidates = 0;
-    this.acceptedRemoteCandidates = 0;
-    this.rejectedRemoteCandidates = 0;
-    this.stats = null;
-    this.previousSent = null;
-    this.previousReceived = null;
+    this.localStream?.getTracks().forEach((track) => track.stop()); this.localStream = null;
+    this.remoteStream?.getTracks().forEach((track) => track.stop()); this.remoteStream = null; this.remoteStreamURL = null;
+    this.closePeer(); this.peerSessionId = null; this.role = null; this.pendingRemoteCandidates = [];
+    this.restartAttempt = 0; this.keyframeAttempt = 0; this.keyframeRequests = 0; this.keyframeForces = 0; this.bitrateParametersApplied = false;
+    this.remoteTrackSeen = false; this.firstFrameSeen = false;
+    this.acceptedLocalCandidates = 0; this.rejectedLocalCandidates = 0; this.acceptedRemoteCandidates = 0; this.rejectedRemoteCandidates = 0;
+    this.stats = null; this.previousSent = null; this.previousReceived = null;
     this.setState({ type: 'idle' });
     if (recordCaptureStop && hadCapture) await this.record('capture_stopped');
   }
 
   private closePeer(): void {
-    const peer = this.peer;
-    this.peer = null;
-    if (!peer) return;
-    peer.onicecandidate = null;
-    peer.ontrack = null;
-    peer.onconnectionstatechange = null;
+    const peer = this.peer; this.peer = null; if (!peer) return;
+    peer.onicecandidate = null; peer.ontrack = null; peer.onconnectionstatechange = null;
     try { peer.close(); } catch { /* already closed */ }
   }
-
-  private requirePeer(sessionId: string): RTCPeerConnection {
-    if (!this.peer || this.peerSessionId !== sessionId) throw new Error('No WebRTC peer for active session.');
-    return this.peer;
-  }
-
-  private clearDisconnectedTimer(): void {
-    if (this.disconnectedTimer) clearTimeout(this.disconnectedTimer);
-    this.disconnectedTimer = null;
-  }
-
-  private clearKeyframeTimer(): void {
-    if (this.keyframeTimer) clearTimeout(this.keyframeTimer);
-    this.keyframeTimer = null;
-  }
-
+  private requirePeer(sessionId: string): RTCPeerConnection { if (!this.peer || this.peerSessionId !== sessionId) throw new Error('No WebRTC peer for active session.'); return this.peer; }
+  private clearDisconnectedTimer(): void { if (this.disconnectedTimer) clearTimeout(this.disconnectedTimer); this.disconnectedTimer = null; }
+  private clearKeyframeTimer(): void { if (this.keyframeTimer) clearTimeout(this.keyframeTimer); this.keyframeTimer = null; }
   private record(kind: DiagnosticEventKind): Promise<void> { return this.diagnostics.append(kind).catch(() => undefined); }
   private setState(next: MediaState): void { this.state = next; this.emit(); }
   private emit(): void { for (const listener of this.listeners) listener(); }
-
-  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.operationQueue.then(operation);
-    this.operationQueue = result.then(() => undefined, () => undefined);
-    return result;
-  }
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> { const result = this.operationQueue.then(operation); this.operationQueue = result.then(() => undefined, () => undefined); return result; }
 }

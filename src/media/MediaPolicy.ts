@@ -25,23 +25,20 @@ export function captureResolutionScale(widthPx: number, heightPx: number): numbe
 export function isPrivateIpv4(address: string): boolean {
   const parts = address.split('.').map(Number);
   if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
-  const [a, b] = parts;
+  const a = parts[0] ?? -1;
+  const b = parts[1] ?? -1;
   return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
 export function classifyIceCandidate(candidate: string): CandidateDecision {
   const parts = candidate.trim().split(/\s+/);
-  if (parts.length < 8 || !parts[0]?.startsWith('candidate:')) {
-    return { accepted: false, protocol: 'unknown', addressFamily: 'unknown', candidateType: 'unknown', reason: 'malformed' };
-  }
-
+  if (parts.length < 8 || !parts[0]?.startsWith('candidate:')) return { accepted: false, protocol: 'unknown', addressFamily: 'unknown', candidateType: 'unknown', reason: 'malformed' };
   const protocol = parts[2]?.toLowerCase() === 'udp' ? 'udp' : parts[2]?.toLowerCase() === 'tcp' ? 'tcp' : 'unknown';
   const address = parts[4] ?? '';
   const typeIndex = parts.indexOf('typ');
   const rawType = typeIndex >= 0 ? parts[typeIndex + 1] : undefined;
   const candidateType = rawType === 'host' || rawType === 'srflx' || rawType === 'relay' || rawType === 'prflx' ? rawType : 'unknown';
   const addressFamily = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(address) ? 'ipv4' : address.includes(':') ? 'ipv6' : 'unknown';
-
   if (candidateType !== 'host') return { accepted: false, protocol, addressFamily, candidateType, reason: 'non_host' };
   if (protocol !== 'udp') return { accepted: false, protocol, addressFamily, candidateType, reason: 'non_udp' };
   if (addressFamily !== 'ipv4') return { accepted: false, protocol, addressFamily, candidateType, reason: 'non_ipv4' };

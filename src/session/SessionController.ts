@@ -23,11 +23,16 @@ export interface SessionControlChannel {
   activate(context: ControlTrustContext): Promise<void>;
   deactivate(): Promise<void>;
   connect(endpoint: { host: string; port: number }): Promise<string>;
+  updateReconnectEndpoint?(endpoint: { host: string; port: number }): void;
   send<T extends ControlMessageType>(type: T, payload: ControlPayloadMap[T]): Promise<AnyControlMessage>;
   close(): Promise<void>;
 }
 
 type Timer = ReturnType<typeof setTimeout>;
+type ActiveProductState = Extract<SessionState, { type: 'OutgoingRequest' | 'IncomingRequest' | 'Connected' }>;
+function isActiveProductState(state: SessionState): state is ActiveProductState {
+  return state.type === 'OutgoingRequest' || state.type === 'IncomingRequest' || state.type === 'Connected';
+}
 
 export class SessionController {
   private state: SessionState = { type: 'Unpaired' };
@@ -47,9 +52,7 @@ export class SessionController {
     private readonly diagnostics: SessionDiagnostics,
     private readonly nowMs: () => number = () => Date.now(),
   ) {
-    this.unsubscribeControl = control.subscribe((event) => {
-      void this.enqueue(() => this.handleControlEvent(event)).catch(() => undefined);
-    });
+    this.unsubscribeControl = control.subscribe((event) => void this.enqueue(() => this.handleControlEvent(event)).catch(() => undefined));
   }
 
   getSnapshot = (): SessionState => this.state;
@@ -80,15 +83,17 @@ export class SessionController {
 
   updateAvailability(snapshot: AvailabilitySnapshot): void {
     this.lastAvailability = snapshot;
+    if (snapshot.kind === 'available') this.control.updateReconnectEndpoint?.(snapshot.endpoint);
     if (this.pair && isBasePairedState(this.state)) this.setState(this.baseState());
   }
 
   requestScreen(): Promise<void> {
     return this.enqueue(async () => {
-      if (this.state.type !== 'PairedAvailable') throw new Error('The trusted partner is not currently available.');
-      const pair = this.state.pair;
+      const current = this.state;
+      if (current.type !== 'PairedAvailable') throw new Error('The trusted partner is not currently available.');
+      const pair = current.pair;
       try {
-        const sessionId = await this.control.connect(this.state.endpoint);
+        const sessionId = await this.control.connect(current.endpoint);
         const expiresAt = new Date(this.nowMs() + CONTROL_REQUEST_TIMEOUT_MS).toISOString();
         await this.control.send('REQUEST_SCREEN', { expiresAt });
         this.setState({ type: 'OutgoingRequest', pair, sessionId, expiresAt });
@@ -104,8 +109,8 @@ export class SessionController {
 
   acceptRequest(): Promise<void> {
     return this.enqueue(async () => {
-      if (this.state.type !== 'IncomingRequest') return;
       const current = this.state;
+      if (current.type !== 'IncomingRequest') return;
       this.clearTimeout();
       await this.pendingStore.clear().catch(() => undefined);
       await this.control.send('ACCEPT_SCREEN', {});
@@ -120,23 +125,23 @@ export class SessionController {
 
   endSession(expectedSessionId?: string): Promise<void> {
     return this.enqueue(async () => {
-      if (this.state.type !== 'Connected') return;
-      if (expectedSessionId !== undefined && this.state.sessionId !== expectedSessionId) return;
-      const pair = this.state.pair;
+      const current = this.state;
+      if (current.type !== 'Connected') return;
+      if (expectedSessionId !== undefined && current.sessionId !== expectedSessionId) return;
       await this.control.send('SESSION_END', { reason: 'user' }).catch(() => undefined);
       await this.control.close().catch(() => undefined);
-      this.setState(this.baseState(pair));
+      this.setState(this.baseState(current.pair));
       await this.record('session_ended');
     });
   }
 
   captureDenied(expectedSessionId: string, reason: 'system_denied' | 'notifications_denied'): Promise<void> {
     return this.enqueue(async () => {
-      if (this.state.type !== 'Connected' || this.state.role !== 'sharer' || this.state.sessionId !== expectedSessionId) return;
-      const pair = this.state.pair;
+      const current = this.state;
+      if (current.type !== 'Connected' || current.role !== 'sharer' || current.sessionId !== expectedSessionId) return;
       await this.control.send('CAPTURE_DENIED', { reason }).catch(() => undefined);
       await this.control.close().catch(() => undefined);
-      this.setState(this.baseState(pair));
+      this.setState(this.baseState(current.pair));
       await this.record('session_ended');
     });
   }
@@ -146,7 +151,8 @@ export class SessionController {
 
   sendMedia<T extends MediaControlMessageType>(expectedSessionId: string, type: T, payload: ControlPayloadMap[T]): Promise<void> {
     return this.enqueue(async () => {
-      if (this.state.type !== 'Connected' || this.state.sessionId !== expectedSessionId) throw new Error('Authenticated media signaling requires the active session.');
+      const current = this.state;
+      if (current.type !== 'Connected' || current.sessionId !== expectedSessionId) throw new Error('Authenticated media signaling requires the active session.');
       await this.control.send(type, payload);
     });
   }
@@ -164,36 +170,27 @@ export class SessionController {
   recover(): Promise<void> { return this.clearError(); }
   dispose(): void { this.unsubscribeControl(); this.clearTimeout(); this.mediaListeners.clear(); }
 
-  private finishRequest<T extends 'DECLINE_SCREEN' | 'REQUEST_CANCEL'>(
-    expected: 'IncomingRequest' | 'OutgoingRequest',
-    type: T,
-    payload: ControlPayloadMap[T],
-    diagnostic: DiagnosticEventKind,
-  ): Promise<void> {
+  private finishRequest<T extends 'DECLINE_SCREEN' | 'REQUEST_CANCEL'>(expected: 'IncomingRequest' | 'OutgoingRequest', type: T, payload: ControlPayloadMap[T], diagnostic: DiagnosticEventKind): Promise<void> {
     return this.enqueue(async () => {
-      if (this.state.type !== expected) return;
-      const pair = this.state.pair;
+      const current = this.state;
+      if (current.type !== expected) return;
       this.clearTimeout();
       await this.pendingStore.clear().catch(() => undefined);
       await this.control.send(type, payload).catch(() => undefined);
       await this.control.close().catch(() => undefined);
-      this.setState(this.baseState(pair));
+      this.setState(this.baseState(current.pair));
       await this.record(diagnostic);
     });
   }
 
   private failConnectedSession(expectedSessionId: string, reason: 'capture_failed' | 'capture_revoked' | 'media_failed'): Promise<void> {
     return this.enqueue(async () => {
-      if (this.state.type !== 'Connected' || this.state.sessionId !== expectedSessionId) return;
-      const pair = this.state.pair;
+      const current = this.state;
+      if (current.type !== 'Connected' || current.sessionId !== expectedSessionId) return;
       await this.control.send('SESSION_ERROR', { reason }).catch(() => undefined);
       await this.control.close().catch(() => undefined);
-      const message = reason === 'capture_revoked'
-        ? 'Android stopped screen sharing.'
-        : reason === 'media_failed'
-          ? 'Chirp could not continue the private video connection.'
-          : 'Chirp could not continue screen sharing.';
-      this.setState({ type: 'Error', pair, message });
+      const message = reason === 'capture_revoked' ? 'Android stopped screen sharing.' : reason === 'media_failed' ? 'Chirp could not continue the private video connection.' : 'Chirp could not continue screen sharing.';
+      this.setState({ type: 'Error', pair: current.pair, message });
       await this.record('session_error');
     });
   }
@@ -203,20 +200,21 @@ export class SessionController {
     if (event.type === 'message') { await this.handleMessage(event.message); return; }
     if (event.type === 'error') {
       await this.record(event.code === 'auth_failed' ? 'control_auth_failed' : event.code === 'transport_failed' ? 'control_transport_failed' : 'session_error');
-      if (this.isActiveProductState()) {
-        const pair = this.state.pair;
+      const current = this.state;
+      if (isActiveProductState(current)) {
         this.clearTimeout();
         await this.pendingStore.clear().catch(() => undefined);
         await this.control.close().catch(() => undefined);
-        this.setState(this.baseState(pair));
+        this.setState(this.baseState(current.pair));
       }
       return;
     }
-    if (event.type === 'closed' && this.isActiveProductState()) {
-      const pair = this.state.pair;
+    if (event.type === 'closed') {
+      const current = this.state;
+      if (!isActiveProductState(current)) return;
       this.clearTimeout();
       await this.pendingStore.clear().catch(() => undefined);
-      this.setState(this.baseState(pair));
+      this.setState(this.baseState(current.pair));
       await this.record('session_ended');
     }
   }
@@ -245,7 +243,8 @@ export class SessionController {
       return;
     }
 
-    if (this.isActiveProductState() && message.sessionId !== this.state.sessionId) return;
+    const active = this.state;
+    if (isActiveProductState(active) && message.sessionId !== active.sessionId) return;
 
     if (message.type === 'REQUEST_CANCEL' && this.state.type === 'IncomingRequest') {
       this.clearTimeout(); await this.pendingStore.clear().catch(() => undefined); await this.control.close().catch(() => undefined); this.setState(this.baseState(pair)); await this.record('session_cancelled'); return;
@@ -265,7 +264,9 @@ export class SessionController {
       if (this.state.type === 'Connected') { for (const listener of this.mediaListeners) listener(message as AnyMediaControlMessage); return; }
       await this.rejectInvalidTransition(pair); return;
     }
-    if ((message.type === 'SESSION_END' || message.type === 'SESSION_ERROR') && this.isActiveProductState()) {
+    if (message.type === 'SESSION_END' || message.type === 'SESSION_ERROR') {
+      const current = this.state;
+      if (!isActiveProductState(current)) { await this.rejectInvalidTransition(pair); return; }
       this.clearTimeout(); await this.pendingStore.clear().catch(() => undefined); await this.control.close().catch(() => undefined);
       const failed = message.type === 'SESSION_ERROR' && ['capture_failed', 'capture_revoked', 'media_failed'].includes(message.payload.reason);
       this.setState(failed ? { type: 'Error', pair, message: 'The other phone could not continue screen sharing.' } : this.baseState(pair));
@@ -287,20 +288,16 @@ export class SessionController {
     this.clearTimeout();
     this.timeoutHandle = setTimeout(() => {
       void this.enqueue(async () => {
-        if ((this.state.type !== 'IncomingRequest' && this.state.type !== 'OutgoingRequest') || this.state.sessionId !== sessionId) return;
-        const pair = this.state.pair;
+        const current = this.state;
+        if ((current.type !== 'IncomingRequest' && current.type !== 'OutgoingRequest') || current.sessionId !== sessionId) return;
         await this.pendingStore.clear().catch(() => undefined);
         if (direction === 'outgoing') await this.control.send('REQUEST_CANCEL', { reason: 'timeout' }).catch(() => undefined);
         else await this.control.send('SESSION_ERROR', { reason: 'timeout' }).catch(() => undefined);
         await this.control.close().catch(() => undefined);
-        this.setState(this.baseState(pair));
+        this.setState(this.baseState(current.pair));
         await this.record('session_timeout');
       }).catch(() => undefined);
     }, Math.max(1, delayMs));
-  }
-
-  private isActiveProductState(): this is this & { state: Extract<SessionState, { type: 'OutgoingRequest' | 'IncomingRequest' | 'Connected' }> } {
-    return this.state.type === 'OutgoingRequest' || this.state.type === 'IncomingRequest' || this.state.type === 'Connected';
   }
 
   private baseState(pairOverride?: PairTrustMetadata): SessionState {
