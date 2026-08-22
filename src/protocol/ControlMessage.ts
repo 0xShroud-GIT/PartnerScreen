@@ -9,6 +9,12 @@ export type MediaControlMessageType =
   | 'SDP_ANSWER'
   | 'ICE_CANDIDATE'
   | 'MEDIA_RESTART_REQUEST';
+
+// Protocol v1 compatibility only. New Chirp builds never send or dispatch this command to MediaSession.
+// Older v1 requesters may still send it after receiving a remote track; authenticated peers must be
+// able to decode it and safely ignore it rather than tearing down the control session.
+export type LegacyControlMessageType = 'MEDIA_KEYFRAME_REQUEST';
+
 export type ControlMessageType =
   | 'REQUEST_SCREEN'
   | 'REQUEST_CANCEL'
@@ -16,6 +22,7 @@ export type ControlMessageType =
   | 'DECLINE_SCREEN'
   | 'CAPTURE_DENIED'
   | MediaControlMessageType
+  | LegacyControlMessageType
   | 'SESSION_END'
   | 'SESSION_ERROR';
 
@@ -27,6 +34,7 @@ export type CaptureDeniedPayload = { reason: 'system_denied' | 'notifications_de
 export type SdpPayload = { sdp: string };
 export type IceCandidatePayload = { sdpMid: string; sdpMLineIndex: number; candidate: string };
 export type MediaRestartRequestPayload = { reason: 'connection_lost' };
+export type LegacyMediaKeyframeRequestPayload = { reason: 'first_frame' };
 export type SessionEndPayload = { reason: 'user' | 'disconnect' | 'timeout' };
 export type SessionErrorPayload = { reason: 'busy' | 'invalid_transition' | 'timeout' | 'auth_failed' | 'capture_failed' | 'capture_revoked' | 'media_failed' };
 
@@ -40,6 +48,7 @@ export interface ControlPayloadMap {
   SDP_ANSWER: SdpPayload;
   ICE_CANDIDATE: IceCandidatePayload;
   MEDIA_RESTART_REQUEST: MediaRestartRequestPayload;
+  MEDIA_KEYFRAME_REQUEST: LegacyMediaKeyframeRequestPayload;
   SESSION_END: SessionEndPayload;
   SESSION_ERROR: SessionErrorPayload;
 }
@@ -80,5 +89,5 @@ export function isMediaControlMessageType(value: unknown): value is MediaControl
     value === 'MEDIA_RESTART_REQUEST';
 }
 export function isControlMessageType(value: unknown): value is ControlMessageType {
-  return value === 'REQUEST_SCREEN' || value === 'REQUEST_CANCEL' || value === 'ACCEPT_SCREEN' || value === 'DECLINE_SCREEN' || value === 'CAPTURE_DENIED' || isMediaControlMessageType(value) || value === 'SESSION_END' || value === 'SESSION_ERROR';
+  return value === 'REQUEST_SCREEN' || value === 'REQUEST_CANCEL' || value === 'ACCEPT_SCREEN' || value === 'DECLINE_SCREEN' || value === 'CAPTURE_DENIED' || isMediaControlMessageType(value) || value === 'MEDIA_KEYFRAME_REQUEST' || value === 'SESSION_END' || value === 'SESSION_ERROR';
 }
