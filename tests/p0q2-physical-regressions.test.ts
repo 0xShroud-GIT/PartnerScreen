@@ -43,6 +43,25 @@ test('P0Q2: requester renderer binding never performs add/remove sink work synch
   assert.ok(!viewer.includes('key={`${requesterSessionId}:${rendererEpoch}`}'), 'pre-LIVE track changes must not force direct renderer remounts');
 });
 
+test('P0Q2: pairing releases temporary QR sockets before normal paired networking takes ownership', async () => {
+  const twin = new PartnerScreenTwin(0x50414952);
+  try {
+    await twin.initialize();
+    await twin.pair();
+
+    assert.equal(twin.alice.pairingService.getSnapshot().kind, 'paired');
+    assert.equal(twin.bob.pairingService.getSnapshot().kind, 'paired');
+    assert.equal(twin.alice.pairingTransport.endpoint, null, 'creator temporary pairing listener must be gone');
+    assert.equal(twin.bob.pairingTransport.endpoint, null, 'scanner must not retain a pairing listener');
+    assert.equal(twin.alice.pairingTransport.links.size, 0, 'creator temporary pairing connection must be closed');
+    assert.equal(twin.bob.pairingTransport.links.size, 0, 'scanner temporary pairing connection must be closed');
+    assert.ok(twin.alice.controlTransport.endpoint, 'normal trusted control listener should be active after cleanup');
+    assert.ok(twin.bob.controlTransport.endpoint, 'normal trusted control listener should be active after cleanup');
+  } finally {
+    twin.dispose();
+  }
+});
+
 test('P0Q2: terminal media failure ends Connected session and cannot restart recovery', async () => {
   const twin = new PartnerScreenTwin(0x50305132);
   try {
