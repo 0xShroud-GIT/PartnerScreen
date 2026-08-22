@@ -12,6 +12,9 @@ const textExtensions = new Set(['.ts', '.tsx', '.js', '.mjs', '.json', '.md', '.
 const legacyMediaPattern = /org\.jitsi:webrtc|WebRtcEngine|PartnerRemoteVideoView|ScreenCaptureCoordinator|MediaSessionController|ExpoWebRtcMedia|SurfaceViewRenderer|ScreenCapturerAndroid|PeerConnectionFactory|\.addSink\(|\.removeSink\(/;
 for (const file of tracked) {
   if (file === 'scripts/check-hygiene.mjs') continue;
+  // The audit report is a deliverable that records the reconciliation against the deleted
+  // PartnerScreen/custom-WebRTC baseline; it must be able to name those historical symbols.
+  if (file === 'CHIRP_DEEP_AUDIT.md') continue;
   if (!textExtensions.has(path.extname(file)) && path.basename(file) !== '.gitignore') continue;
   let text;
   try { text = read(file); } catch { continue; }
@@ -89,6 +92,14 @@ for (const invariant of [
 }
 if (mediaSession.includes('if (this.keyframeAttempt >= MEDIA_KEYFRAME_REQUEST_DELAYS_MS.length)')) {
   fail('first-frame keyframe exhaustion must not escalate into ICE recovery');
+}
+
+const useSession = read('src/presentation/useSession.ts');
+// Screen capture must start exactly once, owned by the Home screen's accept flow.
+// The session hook's acceptRequest must only move the product session to Connected;
+// if it also starts sharing, the Home screen's accept flow double-invokes startSharing.
+if (useSession.includes('mediaSession.startSharing')) {
+  fail('useSession acceptRequest must not start sharing; the Home screen owns accept -> startSharing');
 }
 
 const home = read('app/index.tsx');

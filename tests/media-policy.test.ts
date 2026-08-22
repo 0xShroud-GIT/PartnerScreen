@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   captureResolutionScale,
+  classifyDisplayMediaError,
   classifyIceCandidate,
   MEDIA_DISCONNECTED_GRACE_MS,
   MEDIA_KEYFRAME_REQUEST_DELAYS_MS,
@@ -26,6 +27,20 @@ test('capture scale caps the physical long edge at 1600 without upscaling', () =
   assert.equal(captureResolutionScale(1080, 2400), 1600 / 2400);
   assert.equal(captureResolutionScale(720, 1280), 1);
   assert.equal(captureResolutionScale(0, 0), 1);
+});
+
+test('display-media failure distinguishes user denial from technical capture failure', () => {
+  // react-native-webrtc rejects getDisplayMedia with a DOMException whose name string
+  // is `NotAllowedError` for user denial and `AbortError`/arbitrary messages otherwise.
+  assert.equal(classifyDisplayMediaError({ name: 'NotAllowedError', message: 'NotAllowedError' }), 'user_denied');
+  assert.equal(classifyDisplayMediaError({ message: 'NotAllowedError' }), 'user_denied');
+  assert.equal(classifyDisplayMediaError({ code: 'DOMException', message: 'NotAllowedError' }), 'user_denied');
+
+  assert.equal(classifyDisplayMediaError({ name: 'AbortError', message: 'AbortError' }), 'capture_failed');
+  assert.equal(classifyDisplayMediaError({ message: 'ScreenTrack is null.' }), 'capture_failed');
+  assert.equal(classifyDisplayMediaError(new Error('MediaProjectionManager is null.')), 'capture_failed');
+  assert.equal(classifyDisplayMediaError(undefined), 'capture_failed');
+  assert.equal(classifyDisplayMediaError(null), 'capture_failed');
 });
 
 test('ICE policy accepts only private IPv4 UDP host candidates', () => {

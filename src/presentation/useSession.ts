@@ -11,11 +11,9 @@ export function useSession() {
   return {
     state,
     requestScreen: () => appServices.sessionController.requestScreen(),
-    acceptRequest: async () => {
-      await appServices.sessionController.acceptRequest();
-      const next = appServices.sessionController.getSnapshot();
-      if (next.type === 'Connected' && next.role === 'sharer') await appServices.mediaSession.startSharing();
-    },
+    // Accept only moves the product session to Connected(sharer). Capture/media start
+    // is owned by the Home screen's accept flow, so it is invoked exactly once there.
+    acceptRequest: () => appServices.sessionController.acceptRequest(),
     declineRequest: () => appServices.sessionController.declineRequest(),
     cancelRequest: () => appServices.sessionController.cancelRequest(),
     endSession: async (expectedSessionId?: string) => {

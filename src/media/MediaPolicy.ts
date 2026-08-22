@@ -24,6 +24,24 @@ export function captureResolutionScale(widthPx: number, heightPx: number): numbe
   return Math.max(0.1, Math.min(1, SCREEN_LONG_EDGE_PX / longEdge));
 }
 
+/**
+ * Distinguish the user declining Android's MediaProjection consent from a technical
+ * capture failure. react-native-webrtc surfaces the native getDisplayMedia rejection as
+ * a DOMException whose name string is `NotAllowedError` for user denial and `AbortError`
+ * (or an arbitrary runtime message) for capture/start failures. Denial is a product
+ * outcome; a technical failure is a capture failure and must be reported as such, not
+ * misreported to the partner as "permission not granted".
+ */
+export function classifyDisplayMediaError(error: unknown): 'user_denied' | 'capture_failed' {
+  if (!error || typeof error !== 'object') return 'capture_failed';
+  const candidate = error as { name?: unknown; message?: unknown; code?: unknown };
+  const name = typeof candidate.name === 'string' ? candidate.name : '';
+  const message = typeof candidate.message === 'string' ? candidate.message : '';
+  const code = typeof candidate.code === 'string' ? candidate.code : '';
+  const mentionsNotAllowed = name === 'NotAllowedError' || message === 'NotAllowedError' || message.includes('NotAllowedError') || code === 'NotAllowedError';
+  return mentionsNotAllowed ? 'user_denied' : 'capture_failed';
+}
+
 export function isPrivateIpv4(address: string): boolean {
   const parts = address.split('.').map(Number);
   if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;

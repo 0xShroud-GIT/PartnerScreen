@@ -11,6 +11,7 @@ import type { AnyMediaControlMessage, ControlPayloadMap, MediaControlMessageType
 import type { SessionState } from '../session/SessionState';
 import {
   captureResolutionScale,
+  classifyDisplayMediaError,
   classifyIceCandidate,
   MEDIA_DISCONNECTED_GRACE_MS,
   MEDIA_KEYFRAME_REQUEST_DELAYS_MS,
@@ -185,10 +186,14 @@ export class MediaSession {
           audio: false,
           android: { createConfigForDefaultDisplay: true, resolutionScale: scale },
         } as never);
-      } catch {
-        this.setState({ type: 'error', sessionId, message: 'Android screen sharing permission was not granted.' });
-        await this.record('capture_consent_denied');
-        await this.session.captureDenied(sessionId, 'system_denied');
+      } catch (error) {
+        if (classifyDisplayMediaError(error) === 'user_denied') {
+          this.setState({ type: 'error', sessionId, message: 'Android screen sharing permission was not granted.' });
+          await this.record('capture_consent_denied');
+          await this.session.captureDenied(sessionId, 'system_denied');
+          return;
+        }
+        await this.fail(sessionId, 'Android could not start screen capture.', 'capture_failed');
         return;
       }
 
