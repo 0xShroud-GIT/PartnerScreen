@@ -12,22 +12,15 @@ import android.os.Build
 import android.os.IBinder
 
 /**
- * Android-sanctioned lifecycle for trusted local availability/control.
+ * Android-sanctioned lifecycle for trusted local availability/control while the process is alive.
  *
- * Decision: FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE.
- * Pair availability is a continuous local-device session with a specific trusted phone
- * over private Wi-Fi. Play's connectedDevice type covers network interaction with an
- * external device. CompanionDeviceManager is not used because PartnerScreen already has
- * cryptographic pair trust and must not replace it with a system companion dialog.
- *
- * The service exists only while a confirmed pair requires availability. It does not
- * accept requests, grant MediaProjection, or bypass authentication. JS reconnects to
- * the process-scoped control runtime after Activity recreation.
+ * This foreground service currently keeps the process eligible for trusted local networking;
+ * the actual control ServerSocket remains in PartnerControlModule's process-scoped native runtime.
+ * A full process death therefore cannot reconstruct authenticated reachability yet and must fail closed.
  */
 class PartnerTrustedPresenceService : Service() {
   companion object {
     const val ACTION_START = "com.partnerscreen.control.PRESENCE_START"
-    const val ACTION_STOP = "com.partnerscreen.control.PRESENCE_STOP"
     private const val CHANNEL_ID = "partnerscreen_trusted_presence"
     private const val NOTIFICATION_ID = 7307
 
@@ -41,25 +34,25 @@ class PartnerTrustedPresenceService : Service() {
     }
 
     fun stop(context: Context) {
-      context.startService(Intent(context, PartnerTrustedPresenceService::class.java).setAction(ACTION_STOP))
+      context.stopService(Intent(context, PartnerTrustedPresenceService::class.java))
     }
   }
 
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    when (intent?.action) {
-      ACTION_STOP -> {
-        running = false
-        try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
-        stopSelf()
-      }
-      else -> {
-        running = true
-        createChannel()
-        startForegroundCompat(buildNotification())
-      }
+    // START_STICKY may recreate the service with null Intent after full process death. Until a secure
+    // native trust-store/listener reconstruction bridge exists, advertising "Available" would be false.
+    if (intent?.action != ACTION_START) {
+      running = false
+      try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
+      stopSelf(startId)
+      return START_NOT_STICKY
     }
+
+    running = true
+    createChannel()
+    startForegroundCompat(buildNotification())
     return START_STICKY
   }
 
