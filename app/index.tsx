@@ -85,6 +85,11 @@ export default function Home() {
     if (saved) setEditingName(false);
   };
 
+  const acceptAndStartSharing = async () => {
+    await session.acceptRequest();
+    await media.startSharing();
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       {sharerSessionId ? <SharerKeepAwake /> : null}
@@ -184,7 +189,7 @@ export default function Home() {
                     <View style={styles.requestBox}>
                       <Text style={styles.requestTitle}>{pair.partnerDeviceName} wants to view this screen</Text>
                       <Text style={styles.body}>Nothing is shared until you approve this request and Android's screen-capture prompt.</Text>
-                      <Button label="Share my screen" onPress={() => { void session.acceptRequest(); }} />
+                      <Button label="Share my screen" onPress={() => { void acceptAndStartSharing(); }} />
                       <Button label="Decline" secondary onPress={() => { void session.declineRequest(); }} />
                     </View>
                   ) : null}
