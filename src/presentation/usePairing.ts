@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 import { Alert } from 'react-native';
 import { appServices } from '../application/AppServices';
 
@@ -26,10 +26,6 @@ export function usePairing() {
     appServices.pairingService.getSnapshot,
     appServices.pairingService.getSnapshot,
   );
-
-  useEffect(() => {
-    void appServices.pairingService.initialize();
-  }, []);
 
   return {
     state,
