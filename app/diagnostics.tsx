@@ -57,7 +57,7 @@ export default function DiagnosticsScreen() {
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
       {!loading && !identityLoading && !error ? (
         <>
-          <View style={styles.reportBox}><Text selectable style={styles.report}>{report}</Text></View>
+          <View style={styles.reportBox}><Text style={styles.report}>{report}</Text></View>
           <Pressable accessibilityRole="button" onPress={() => void copy()} style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}><Text style={styles.primaryButtonText}>Copy report</Text></Pressable>
           {copied ? <Text style={styles.copied}>Copied.</Text> : null}
           <Pressable accessibilityRole="button" onPress={() => void refresh()} style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}><Text style={styles.secondaryButtonText}>Refresh</Text></Pressable>
