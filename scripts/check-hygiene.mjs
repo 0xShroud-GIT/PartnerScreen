@@ -102,14 +102,27 @@ for (const [name, workflow] of [['CI', ciWorkflow], ['APK', apkWorkflow]]) {
 for (const invariant of [
   'ref: ${{ github.event.pull_request.head.sha || github.sha }}',
   'CHIRP_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}',
+  'name: chirp-qualification-apk',
 ]) {
-  if (!apkWorkflow.includes(invariant)) fail(`APK workflow source identity invariant missing: ${invariant}`);
+  if (!apkWorkflow.includes(invariant)) fail(`APK workflow source/artifact invariant missing: ${invariant}`);
 }
 
 const buildApk = read('scripts/build-apk.sh');
-for (const invariant of ['assets/app.config', 'CHIRP_BUILD_COMMIT', 'libjingle_peerconnection_so.so', 'SYSTEM_ALERT_WINDOW', 'RECORD_AUDIO', 'BUILD_INFO.txt']) {
-  if (!buildApk.includes(invariant)) fail(`APK verification invariant missing: ${invariant}`);
+for (const invariant of [
+  ':app:assembleRelease',
+  'app/build/outputs/apk/release/app-release.apk',
+  'chirp-qualification-arm64-v8a-x86_64.apk',
+  'assets/index.android.bundle',
+  'assets/app.config',
+  'CHIRP_BUILD_COMMIT',
+  'libjingle_peerconnection_so.so',
+  'SYSTEM_ALERT_WINDOW',
+  'RECORD_AUDIO',
+  'BUILD_INFO.txt',
+]) {
+  if (!buildApk.includes(invariant)) fail(`standalone APK verification invariant missing: ${invariant}`);
 }
+if (buildApk.includes(':app:assembleDebug')) fail('qualification APK must never use the Metro-dependent debug build type');
 
 if (process.exitCode) process.exit(process.exitCode);
 console.log(`Hygiene OK: ${tracked.length} tracked files checked.`);
