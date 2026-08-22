@@ -65,13 +65,13 @@ The APK build performs a clean Android prebuild and writes development artifacts
 
 ## Architecture rule
 
-Product-session, control-connection, and WebRTC lifetimes are separate.
+Product-session, control-connection, and WebRTC lifetimes are separate. Chirp does not emulate encoder or decoder recovery in application code: native libwebrtc owns RTCP feedback such as PLI/FIR and keyframe recovery.
 
 ```text
-Bad frame      -> keyframe recovery
-Bad ICE        -> ICE recovery
-Bad control    -> authenticated control reconnect
-Persistent media failure -> fail the product session
+Missing/undecodable frame -> native WebRTC RTCP feedback + stats
+Bad ICE/DTLS transport    -> bounded ICE restart
+Bad control transport     -> authenticated control reconnect
+Persistent media failure  -> fail the product session
 ```
 
-Only product-session code decides that the user-visible sharing session is over.
+Only product-session code decides that the user-visible sharing session is over. A MediaProjection track is capture ownership, not an encoder-control primitive: while a share is active it is never disabled or restarted to manipulate WebRTC.
