@@ -4,16 +4,16 @@ export const CONTROL_TIMESTAMP_TOLERANCE_MS = 120_000;
 export const MAX_MEDIA_SDP_CHARS = 12 * 1024;
 export const MAX_MEDIA_CANDIDATE_CHARS = 2048;
 
+// Protocol v1 compatibility only. Current Chirp never sends MEDIA_KEYFRAME_REQUEST, but older v1
+// requesters can still send it after receiving a track. It remains decodable/authenticated and is
+// routed through MediaSession as a no-op so mixed-version peers do not lose the control session.
+export type LegacyMediaControlMessageType = 'MEDIA_KEYFRAME_REQUEST';
 export type MediaControlMessageType =
   | 'SDP_OFFER'
   | 'SDP_ANSWER'
   | 'ICE_CANDIDATE'
-  | 'MEDIA_RESTART_REQUEST';
-
-// Protocol v1 compatibility only. New Chirp builds never send or dispatch this command to MediaSession.
-// Older v1 requesters may still send it after receiving a remote track; authenticated peers must be
-// able to decode it and safely ignore it rather than tearing down the control session.
-export type LegacyControlMessageType = 'MEDIA_KEYFRAME_REQUEST';
+  | 'MEDIA_RESTART_REQUEST'
+  | LegacyMediaControlMessageType;
 
 export type ControlMessageType =
   | 'REQUEST_SCREEN'
@@ -22,7 +22,6 @@ export type ControlMessageType =
   | 'DECLINE_SCREEN'
   | 'CAPTURE_DENIED'
   | MediaControlMessageType
-  | LegacyControlMessageType
   | 'SESSION_END'
   | 'SESSION_ERROR';
 
@@ -86,8 +85,9 @@ export function isMediaControlMessageType(value: unknown): value is MediaControl
   return value === 'SDP_OFFER' ||
     value === 'SDP_ANSWER' ||
     value === 'ICE_CANDIDATE' ||
-    value === 'MEDIA_RESTART_REQUEST';
+    value === 'MEDIA_RESTART_REQUEST' ||
+    value === 'MEDIA_KEYFRAME_REQUEST';
 }
 export function isControlMessageType(value: unknown): value is ControlMessageType {
-  return value === 'REQUEST_SCREEN' || value === 'REQUEST_CANCEL' || value === 'ACCEPT_SCREEN' || value === 'DECLINE_SCREEN' || value === 'CAPTURE_DENIED' || isMediaControlMessageType(value) || value === 'MEDIA_KEYFRAME_REQUEST' || value === 'SESSION_END' || value === 'SESSION_ERROR';
+  return value === 'REQUEST_SCREEN' || value === 'REQUEST_CANCEL' || value === 'ACCEPT_SCREEN' || value === 'DECLINE_SCREEN' || value === 'CAPTURE_DENIED' || isMediaControlMessageType(value) || value === 'SESSION_END' || value === 'SESSION_ERROR';
 }
