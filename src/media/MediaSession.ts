@@ -217,7 +217,7 @@ export class MediaSession {
       const consentResult = await settlePromiseWithTimeout(consent, MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS);
       if (consentResult.status === 'timeout') {
         void consent.then(
-          (late) => late.getTracks().forEach((track) => track.stop()),
+          (late) => this.disposeOwnedLocalStream(late),
           () => undefined,
         );
         await this.denyCapture(sessionId, 'getDisplayMedia timed out waiting for Android consent');
@@ -229,9 +229,20 @@ export class MediaSession {
       }
 
       const stream = consentResult.value;
+      const currentProduct = this.session.getSnapshot();
+      if (
+        currentProduct.type !== 'Connected'
+        || currentProduct.role !== 'sharer'
+        || currentProduct.sessionId !== sessionId
+      ) {
+        this.disposeOwnedLocalStream(stream);
+        if (this.peerSessionId === sessionId) await this.resetMedia(false);
+        return;
+      }
+
       const track = stream.getVideoTracks()[0];
       if (!track) {
-        stream.getTracks().forEach((item) => item.stop());
+        this.disposeOwnedLocalStream(stream);
         await this.fail(sessionId, 'Screen capture returned no video track.', 'capture_failed');
         return;
       }
@@ -394,6 +405,8 @@ export class MediaSession {
 
     if (disposition === 'connected') {
       this.clearDisconnectedTimer();
+      if (this.restartTimer) clearTimeout(this.restartTimer);
+      this.restartTimer = null;
       const recovered = this.restartAttempt > 0;
       this.restartAttempt = 0;
       if (role === 'requester' && !this.firstFrameSeen) {
@@ -540,7 +553,7 @@ export class MediaSession {
       this.restartTimer = null;
       void this.enqueue(async () => {
         const current = this.session.getSnapshot();
-        if (current.type !== 'Connected' || current.sessionId !== sessionId) return;
+        if (current.type !== 'Connected' || current.sessionId !== sessionId || this.restartAttempt !== attempt) return;
         try {
           if (current.role === 'sharer') await this.restartAsSharer(sessionId);
           else await this.rtcOperation('send MEDIA_RESTART_REQUEST', () => this.session.sendMedia(sessionId, 'MEDIA_RESTART_REQUEST', { reason: 'connection_lost' }));
@@ -563,22 +576,33 @@ export class MediaSession {
 
   private scheduleStats(): void {
     if (this.statsTimer) return;
+    const peer = this.peer;
+    const sessionId = this.peerSessionId;
+    if (!peer || !sessionId) return;
     const poll = async () => {
       this.statsTimer = null;
       try {
-        await this.collectStats();
+        await this.collectStats(peer, sessionId);
       } catch (error) {
-        this.noteFailure('getStats', error);
+        if (this.peer === peer && this.peerSessionId === sessionId) this.noteFailure('getStats', error);
       }
-      if (this.peer) this.statsTimer = setTimeout(() => void poll(), MEDIA_STATS_INTERVAL_MS);
+      if (this.peer === peer && this.peerSessionId === sessionId) {
+        this.statsTimer = setTimeout(() => void poll(), MEDIA_STATS_INTERVAL_MS);
+      }
     };
     this.statsTimer = setTimeout(() => void poll(), MEDIA_STATS_INTERVAL_MS);
   }
 
-  private async collectStats(): Promise<void> {
-    const peer = this.peer;
-    if (!peer) return;
+  private async collectStats(peer: RTCPeerConnection, sessionId: string): Promise<void> {
     const report = await peer.getStats();
+    const product = this.session.getSnapshot();
+    if (
+      this.peer !== peer
+      || this.peerSessionId !== sessionId
+      || product.type !== 'Connected'
+      || product.sessionId !== sessionId
+    ) return;
+
     const now = this.nowMs();
     const next: MediaStatsSnapshot = { atMs: now };
     let sentBytes: number | undefined;
@@ -732,13 +756,9 @@ export class MediaSession {
     this.restartTimer = null;
     this.statsTimer = null;
 
-    const hadCapture = Boolean(this.localStream);
-    const localTracks = this.localStream?.getTracks() ?? [];
-    for (const track of localTracks) {
-      (track as unknown as EndedAwareTrack).onended = null;
-      track.stop();
-    }
-    this.localStream = null;
+    const localStream = this.localStream;
+    const hadCapture = Boolean(localStream);
+    if (localStream) this.disposeOwnedLocalStream(localStream);
 
     this.remoteStreamURL = null;
     this.remoteStream = null;
@@ -749,6 +769,19 @@ export class MediaSession {
     this.resetActiveDiagnostics();
     this.setState({ type: 'idle' });
     if (recordCaptureStop && hadCapture) await this.record('capture_stopped');
+  }
+
+  private disposeOwnedLocalStream(stream: MediaStream): void {
+    const installed = this.localStream === stream;
+    for (const track of stream.getTracks()) {
+      (track as unknown as EndedAwareTrack).onended = null;
+      try { track.stop(); } catch { /* already stopped */ }
+    }
+    if (installed) {
+      this.localStream = null;
+      this.closePeer();
+    }
+    try { stream.release(); } catch { /* already released */ }
   }
 
   private closePeer(): void {
