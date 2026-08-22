@@ -57,7 +57,7 @@ export default function DiagnosticsScreen() {
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {!loading && !identityLoading && !error ? (
         <>
-          <View style={styles.reportBox}><Text selectable style={styles.report}>{report}</Text></View>
+          <View style={styles.reportBox}><Text style={styles.report}>{report}</Text></View>
           <Pressable onPress={() => void copy()} style={styles.primaryButton}><Text style={styles.primaryButtonText}>Copy report</Text></Pressable>
           {copied ? <Text>Copied.</Text> : null}
           <Pressable onPress={() => void refresh()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Refresh</Text></Pressable>
