@@ -67,31 +67,35 @@ for (const invariant of [
   'SCREEN_MIN_BITRATE_BPS = 1_000_000',
   'SCREEN_MAX_BITRATE_BPS = 8_000_000',
   'MEDIA_DISCONNECTED_GRACE_MS = 3_000',
-  'MEDIA_KEYFRAME_REQUEST_DELAYS_MS',
-  'MEDIA_KEYFRAME_STEADY_RETRY_MS = 5_000',
   'MEDIA_SIGNAL_RETRY_MS = 1_000',
+  'MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS = 60_000',
   "degradationPreference: 'maintain-resolution'",
 ]) {
   if (!mediaPolicy.includes(invariant)) fail(`media policy invariant missing: ${invariant}`);
 }
+if (/MEDIA_KEYFRAME_|keyframeRetryDelayMs/.test(mediaPolicy)) fail('app-level keyframe timers must not return to media policy');
 
 const mediaSession = read('src/media/MediaSession.ts');
 for (const invariant of [
-  "sendMedia(sessionId, 'MEDIA_KEYFRAME_REQUEST'",
-  'MEDIA_KEYFRAME_STEADY_RETRY_MS',
+  'peer.oniceconnectionstatechange',
+  'peer.iceConnectionState',
   'createOffer(iceRestart ? { iceRestart: true } : undefined)',
   'parameters.degradationPreference = patch.degradationPreference',
   'senderBitrateParameters(',
-  'await this.forceKeyframe(sessionId);',
   "(track as unknown as EndedAwareTrack).onended = null",
-  "this.peer?.connectionState === 'connected'",
+  '(next.framesDecoded ?? 0) > 0',
   'getStatsSnapshot',
 ]) {
   if (!mediaSession.includes(invariant)) fail(`media recovery/observability invariant missing: ${invariant}`);
 }
-if (mediaSession.includes('if (this.keyframeAttempt >= MEDIA_KEYFRAME_REQUEST_DELAYS_MS.length)')) {
-  fail('first-frame keyframe exhaustion must not escalate into ICE recovery');
+for (const forbidden of ['MEDIA_KEYFRAME_REQUEST', 'MEDIA_KEYFRAME_TOGGLE_MS', 'scheduleKeyframeRecovery', 'forceKeyframe(']) {
+  if (mediaSession.includes(forbidden)) fail(`MediaProjection-unsafe keyframe workaround returned: ${forbidden}`);
 }
+if (/\.enabled\s*=\s*false/.test(mediaSession)) fail('active screen-capture tracks must never be disabled to manipulate encoder state');
+
+const controlMessage = read('src/protocol/ControlMessage.ts');
+if (controlMessage.includes('MEDIA_KEYFRAME_REQUEST')) fail('control protocol must delegate keyframe feedback to native WebRTC RTCP');
+if (!controlMessage.includes('MEDIA_RESTART_REQUEST')) fail('control protocol must retain explicit ICE restart ownership');
 
 const home = read('app/index.tsx');
 const layout = read('app/_layout.tsx');
