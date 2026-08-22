@@ -387,6 +387,10 @@ export class MediaSessionController {
     this.scheduleFirstFrameDeadline(sessionId);
   }
 
+  private isTransportConnected(): boolean {
+    return this.transport.peerConnectionState === 'connected' || this.transport.iceConnectionState === 'connected' || this.transport.iceConnectionState === 'completed';
+  }
+
   private scheduleConnectionDeadline(sessionId: string): void {
     if (this.connectionDeadlineTimer || this.recoveryTimer) return;
     this.connectionDeadlineTimer = this.scheduler.schedule(MEDIA_CONNECTION_TIMEOUT_MS, () => {
@@ -394,7 +398,7 @@ export class MediaSessionController {
       void this.enqueue(async () => {
         if (!this.isCurrentSession(sessionId)) return;
         if (this.state.type === 'live' && this.state.sessionId === sessionId) return;
-        if (this.state.type === 'publishing' && this.state.sessionId === sessionId && this.state.quality === 'good') return;
+        if (this.isTransportConnected()) return;
         if (this.state.type === 'reconnecting') return;
         await this.beginRecovery(sessionId, true);
       }).catch(() => undefined);
@@ -423,13 +427,16 @@ export class MediaSessionController {
         if (this.recoveryAttempt === 0) return;
         if (!this.isCurrentSession(sessionId)) return;
         if (this.state.type === 'live' && this.state.sessionId === sessionId) return;
-        if (this.state.type === 'publishing' && this.state.sessionId === sessionId && this.state.quality === 'good') return;
+        if (this.isTransportConnected()) return;
         await this.beginRecovery(sessionId, false);
       }).catch(() => undefined);
     });
   }
 
-  private statsInFlight = false;
+  private statsGeneration = 0;
+  private statsInFlight: { generation: number; sessionId: string } | null = null;
+  private statsTimeout: RecoveryTimer | null = null;
+
   private scheduleStats(sessionId: string): void {
     this.clearStatsTimer();
     this.statsTimer = this.scheduler.schedule(MEDIA_STATS_POLL_INTERVAL_MS, () => {
@@ -440,16 +447,51 @@ export class MediaSessionController {
   }
 
   private async pullStats(sessionId: string): Promise<void> {
-    if (this.statsInFlight) return;
+    if (this.statsInFlight?.sessionId === sessionId) return;
     if (!this.isCurrentSession(sessionId)) return;
     if (this.state.type !== 'live' && this.state.type !== 'publishing' && this.state.type !== 'remote_track_attached') return;
     if (this.state.sessionId !== sessionId) return;
-    this.statsInFlight = true;
-    const raw = await Promise.race([
-      this.native.getStats(sessionId).catch(() => null),
-      new Promise<null>((resolve) => { setTimeout(() => resolve(null), 1_200); }),
-    ]).catch(() => null);
-    this.statsInFlight = false;
+    const generation = ++this.statsGeneration;
+    this.statsInFlight = { generation, sessionId };
+    let timeoutFired = false;
+    const timeoutPromise = new Promise<{ timedOut: true }>((resolve) => {
+      this.statsTimeout = this.scheduler.schedule(1200, () => {
+        timeoutFired = true;
+        resolve({ timedOut: true });
+      });
+    });
+    const nativePromise = this.native.getStats(sessionId)
+      .then((value) => ({ value: value as SanitizedMediaStats | null, timedOut: false as const }))
+      .catch(() => ({ value: null as SanitizedMediaStats | null, timedOut: false as const }));
+    const winner = await Promise.race([
+      nativePromise.then((result) => {
+        if (this.statsTimeout) {
+          this.statsTimeout.cancel();
+          this.statsTimeout = null;
+        }
+        return result;
+      }),
+      timeoutPromise.then(() => ({ value: null as SanitizedMediaStats | null, timedOut: true as const })),
+    ]).catch(() => ({ value: null as SanitizedMediaStats | null, timedOut: true as const }));
+    if (winner.timedOut) {
+      // Presentation timeout: abandon sample but keep native request in-flight.
+      // Late completion must not mutate a replaced session and must not be counted as finished.
+      nativePromise.then(() => {
+        if (this.statsInFlight?.generation === generation && this.statsInFlight?.sessionId === sessionId) {
+          this.statsInFlight = null;
+        }
+      }).catch(() => {
+        if (this.statsInFlight?.generation === generation) this.statsInFlight = null;
+      });
+      return;
+    }
+    // Native completed before timeout.
+    if (this.statsInFlight?.generation !== generation || !this.isCurrentSession(sessionId)) {
+      this.statsInFlight = null;
+      return;
+    }
+    const raw = (winner as { value: SanitizedMediaStats | null }).value;
+    this.statsInFlight = null;
     const sanitized = sanitizeMediaStats(raw);
     if (sanitized && typeof sanitized.bytesSent === 'number') {
       const measured = measuredBitrateBps(this.previousBytesSent, sanitized.bytesSent, this.nowMs());
@@ -501,7 +543,19 @@ export class MediaSessionController {
   private clearFirstFrameDeadline(): void { this.firstFrameDeadlineTimer?.cancel(); this.firstFrameDeadlineTimer = null; }
   private clearStatsTimer(): void { this.statsTimer?.cancel(); this.statsTimer = null; }
   private clearDeadlines(): void { this.clearInitialDeadline(); this.clearConnectionDeadline(); this.clearFirstFrameDeadline(); this.clearStatsTimer(); }
-  private clearStats(): void { this.clearStatsTimer(); this.stats = null; this.liveHealth = 'good'; this.previousBytesSent = null; this.previousPacketsLost = undefined; this.transport = emptyMediaTransportSnapshot(); }
+  private clearStats(): void {
+    this.clearStatsTimer();
+    if (this.statsTimeout) {
+      this.statsTimeout.cancel();
+      this.statsTimeout = null;
+    }
+    this.statsInFlight = null;
+    this.stats = null;
+    this.liveHealth = 'good';
+    this.previousBytesSent = null;
+    this.previousPacketsLost = undefined;
+    this.transport = emptyMediaTransportSnapshot();
+  }
   private observeNative(event: WebRtcMediaNativeEvent): void {
     if (event.type === 'connection_state') {
       this.transport = { ...this.transport, peerConnectionState: event.state };
