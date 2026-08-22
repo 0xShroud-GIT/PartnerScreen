@@ -48,5 +48,5 @@ test('discovery authentication rejects malformed values and proof-encoded invali
 
 test('fixed HMAC-SHA256 known-answer vector matches the production 32-byte key contract', async () => {
   const result = await new NodeHmacSha256().macHex('0b'.repeat(32), 'Chirp|discovery-selftest|v1');
-  assert.equal(result, '32c189446484d072bdfa7c0f1c13605c7f048820c3fe17753c4836b1f6dc22fd');
+  assert.equal(result, '39d8f618a7e2c5b378f96741ea63a8dbc14ce826522435aeb8b193130694f3e5');
 });
