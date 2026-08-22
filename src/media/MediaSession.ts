@@ -14,10 +14,6 @@ import {
   classifyIceCandidate,
   MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
   MEDIA_DISCONNECTED_GRACE_MS,
-  MEDIA_KEYFRAME_REQUEST_DELAYS_MS,
-  MEDIA_KEYFRAME_STEADY_RETRY_MS,
-  MEDIA_KEYFRAME_TOGGLE_MS,
-  keyframeRetryDelayMs,
   MEDIA_RESTART_DELAYS_MS,
   MEDIA_SIGNAL_RETRY_MS,
   MEDIA_STATS_INTERVAL_MS,
@@ -61,6 +57,10 @@ export interface MediaStatsSnapshot {
 export interface MediaDiagnosticSnapshot {
   state: MediaState['type'];
   role?: 'requester' | 'sharer' | undefined;
+  connectionState?: string | undefined;
+  iceConnectionState?: string | undefined;
+  iceGatheringState?: string | undefined;
+  signalingState?: string | undefined;
   remoteTrackSeen: boolean;
   firstFrameSeen: boolean;
   acceptedLocalCandidates: number;
@@ -68,8 +68,6 @@ export interface MediaDiagnosticSnapshot {
   acceptedRemoteCandidates: number;
   rejectedRemoteCandidates: number;
   restartAttempts: number;
-  keyframeRequests: number;
-  keyframeForces: number;
   bitrateParametersApplied: boolean;
   stats: MediaStatsSnapshot | null;
 }
@@ -87,7 +85,6 @@ interface MediaAuthority {
 interface MediaDiagnostics { append(kind: DiagnosticEventKind): Promise<void>; }
 type Timer = ReturnType<typeof setTimeout>;
 type ByteSample = { atMs: number; bytes: number };
-
 type EndedAwareTrack = { onended?: (() => void) | null };
 
 function numeric(value: unknown): number | undefined {
@@ -95,6 +92,9 @@ function numeric(value: unknown): number | undefined {
 }
 function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+function peerTransportConnected(peer: RTCPeerConnection): boolean {
+  return peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed';
 }
 
 export class MediaSession {
@@ -109,12 +109,8 @@ export class MediaSession {
   private pendingRemoteCandidates: RTCIceCandidate[] = [];
   private disconnectedTimer: Timer | null = null;
   private restartTimer: Timer | null = null;
-  private keyframeTimer: Timer | null = null;
   private statsTimer: Timer | null = null;
   private restartAttempt = 0;
-  private keyframeAttempt = 0;
-  private keyframeRequests = 0;
-  private keyframeForces = 0;
   private bitrateParametersApplied = false;
   private remoteTrackSeen = false;
   private firstFrameSeen = false;
@@ -145,6 +141,10 @@ export class MediaSession {
   getDiagnosticSnapshot = (): MediaDiagnosticSnapshot => ({
     state: this.state.type,
     role: this.role ?? undefined,
+    connectionState: this.peer?.connectionState,
+    iceConnectionState: this.peer?.iceConnectionState,
+    iceGatheringState: this.peer?.iceGatheringState,
+    signalingState: this.peer?.signalingState,
     remoteTrackSeen: this.remoteTrackSeen,
     firstFrameSeen: this.firstFrameSeen,
     acceptedLocalCandidates: this.acceptedLocalCandidates,
@@ -152,8 +152,6 @@ export class MediaSession {
     acceptedRemoteCandidates: this.acceptedRemoteCandidates,
     rejectedRemoteCandidates: this.rejectedRemoteCandidates,
     restartAttempts: this.restartAttempt,
-    keyframeRequests: this.keyframeRequests,
-    keyframeForces: this.keyframeForces,
     bitrateParametersApplied: this.bitrateParametersApplied,
     stats: this.stats,
   });
@@ -190,8 +188,7 @@ export class MediaSession {
         new Promise<{ granted: false }>((resolve) => setTimeout(() => resolve({ granted: false }), MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS)),
       ]);
       if (!consentResult.granted) {
-        // Bounded fail-closed: the consent dialog did not settle. If Android grants late, stop the
-        // orphaned capture so no projection leaks; a fresh request can be made on a new session.
+        // Bounded fail-closed: if Android grants after the app timeout, stop that orphaned projection.
         void consent.then((late) => late.getTracks().forEach((track) => track.stop())).catch(() => undefined);
         this.setState({ type: 'error', sessionId, message: 'Android screen sharing permission was not granted.' });
         await this.record('capture_consent_denied');
@@ -223,8 +220,7 @@ export class MediaSession {
       try {
         await this.configureSender(sender);
       } catch {
-        // Preferred bitrate/fps parameters are a quality preference, never a session blocker. If the
-        // native sender refuses them, continue sharing rather than failing the whole screen share.
+        // Sender bitrate/fps settings are a quality preference, never a session-lifetime decision.
         await this.record('media_bitrate_parameters_failed');
       }
       this.setState({ type: 'connecting', sessionId, role: 'sharer' });
@@ -293,48 +289,57 @@ export class MediaSession {
       this.remoteStreamURL = stream.toURL();
       if (!this.remoteTrackSeen) void this.record('media_remote_track');
       this.remoteTrackSeen = true;
-      this.scheduleKeyframeRecovery(sessionId);
       this.emit();
     };
 
-    peer.onconnectionstatechange = () => {
-      if (this.peer !== peer || this.peerSessionId !== sessionId) return;
-      const state = peer.connectionState;
-      if (state === 'connected') {
-        this.clearDisconnectedTimer();
-        const recovered = this.restartAttempt > 0;
-        this.restartAttempt = 0;
-        if (role === 'requester' && !this.firstFrameSeen) {
-          this.setState({ type: 'connecting', sessionId, role });
-          if (this.remoteTrackSeen) this.scheduleKeyframeRecovery(sessionId);
-        } else {
-          this.setState({ type: 'live', sessionId, role });
-        }
-        if (recovered) void this.record('media_reconnected');
-        return;
-      }
-      if (state === 'disconnected') {
-        if (!this.disconnectedTimer) {
-          void this.record('media_degraded');
-          this.disconnectedTimer = setTimeout(() => {
-            this.disconnectedTimer = null;
-            void this.enqueue(() => this.scheduleRecovery(sessionId)).catch(() => undefined);
-          }, MEDIA_DISCONNECTED_GRACE_MS);
-        }
-        return;
-      }
-      if (state === 'failed') {
-        this.clearDisconnectedTimer();
-        void this.enqueue(() => this.scheduleRecovery(sessionId)).catch(() => undefined);
-      }
-    };
+    peer.oniceconnectionstatechange = () => this.handlePeerTransportState(peer, sessionId, role);
+    peer.onconnectionstatechange = () => this.handlePeerTransportState(peer, sessionId, role);
+    peer.onicegatheringstatechange = () => { if (this.peer === peer) this.emit(); };
+    peer.onsignalingstatechange = () => { if (this.peer === peer) this.emit(); };
     return peer;
+  }
+
+  private handlePeerTransportState(peer: RTCPeerConnection, sessionId: string, role: 'requester' | 'sharer'): void {
+    if (this.peer !== peer || this.peerSessionId !== sessionId) return;
+    const iceState = peer.iceConnectionState;
+    const connectionState = peer.connectionState;
+
+    if (peerTransportConnected(peer) && connectionState !== 'failed') {
+      this.clearDisconnectedTimer();
+      const recovered = this.restartAttempt > 0;
+      this.restartAttempt = 0;
+      if (role === 'requester' && !this.firstFrameSeen) this.setState({ type: 'connecting', sessionId, role });
+      else this.setState({ type: 'live', sessionId, role });
+      if (recovered) void this.record('media_reconnected');
+      return;
+    }
+
+    if (iceState === 'failed' || connectionState === 'failed') {
+      this.clearDisconnectedTimer();
+      this.emit();
+      void this.enqueue(() => this.scheduleRecovery(sessionId)).catch(() => undefined);
+      return;
+    }
+
+    if (iceState === 'disconnected' || connectionState === 'disconnected') {
+      if (!this.disconnectedTimer) {
+        void this.record('media_degraded');
+        this.disconnectedTimer = setTimeout(() => {
+          this.disconnectedTimer = null;
+          void this.enqueue(() => this.scheduleRecovery(sessionId)).catch(() => undefined);
+        }, MEDIA_DISCONNECTED_GRACE_MS);
+      }
+      this.emit();
+      return;
+    }
+
+    this.emit();
   }
 
   private async configureSender(sender: ReturnType<RTCPeerConnection['addTrack']>): Promise<void> {
     const parameters = sender.getParameters() as any;
     const patch = senderBitrateParameters(parameters?.encodings as ReadonlyArray<Record<string, unknown>> | undefined);
-    if (!patch.applicable) return; // no encodings yet; do not fabricate a mismatched encoding array
+    if (!patch.applicable) return;
     parameters.encodings = patch.encodings;
     parameters.degradationPreference = patch.degradationPreference;
     await sender.setParameters(parameters as never);
@@ -355,7 +360,6 @@ export class MediaSession {
     if (product.type !== 'Connected' || product.sessionId !== message.sessionId) return;
     const sessionId = product.sessionId;
     try {
-      if (message.type === 'MEDIA_KEYFRAME_REQUEST') { if (product.role === 'sharer') await this.forceKeyframe(sessionId); return; }
       if (message.type === 'MEDIA_RESTART_REQUEST') { if (product.role === 'sharer') await this.restartAsSharer(sessionId); return; }
       if (message.type === 'ICE_CANDIDATE') {
         const decision = classifyIceCandidate(message.payload.candidate);
@@ -384,42 +388,10 @@ export class MediaSession {
         const peer = this.requirePeer(sessionId);
         await peer.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: message.payload.sdp }));
         await this.flushRemoteCandidates(peer);
-        await this.forceKeyframe(sessionId);
       }
     } catch {
-      if (message.type !== 'MEDIA_KEYFRAME_REQUEST') await this.scheduleRecovery(sessionId);
+      await this.scheduleRecovery(sessionId);
     }
-  }
-
-  private async forceKeyframe(sessionId: string): Promise<void> {
-    if (this.peerSessionId !== sessionId || this.role !== 'sharer') return;
-    const track = this.localStream?.getVideoTracks()[0];
-    if (!track) return;
-    this.keyframeForces += 1;
-    await this.record('media_keyframe_forced');
-    track.enabled = false;
-    await new Promise<void>((resolve) => setTimeout(resolve, MEDIA_KEYFRAME_TOGGLE_MS));
-    if (this.peerSessionId === sessionId && this.localStream?.getVideoTracks()[0] === track) track.enabled = true;
-    this.emit();
-  }
-
-  private scheduleKeyframeRecovery(sessionId: string): void {
-    if (!sessionId || this.firstFrameSeen || this.keyframeTimer || this.role !== 'requester' || this.peerSessionId !== sessionId) return;
-    const delay = keyframeRetryDelayMs(this.keyframeAttempt);
-    this.keyframeTimer = setTimeout(() => {
-      this.keyframeTimer = null;
-      void this.enqueue(async () => {
-        if (this.firstFrameSeen || this.role !== 'requester' || this.peerSessionId !== sessionId) return;
-        const product = this.session.getSnapshot();
-        if (product.type !== 'Connected' || product.sessionId !== sessionId) return;
-        if (this.keyframeAttempt < MEDIA_KEYFRAME_REQUEST_DELAYS_MS.length) this.keyframeAttempt += 1;
-        this.keyframeRequests += 1;
-        await this.record('media_keyframe_requested');
-        await this.session.sendMedia(sessionId, 'MEDIA_KEYFRAME_REQUEST', { reason: 'first_frame' }).catch(() => undefined);
-        this.emit();
-        this.scheduleKeyframeRecovery(sessionId);
-      }).catch(() => undefined);
-    }, delay);
   }
 
   private async flushRemoteCandidates(peer: RTCPeerConnection): Promise<void> {
@@ -528,13 +500,10 @@ export class MediaSession {
     this.stats = next;
     if (!this.firstFrameSeen && this.role === 'requester' && (next.framesDecoded ?? 0) > 0) {
       this.firstFrameSeen = true;
-      this.clearKeyframeTimer();
-      if (this.peerSessionId && this.peer?.connectionState === 'connected') {
+      if (this.peerSessionId && peerTransportConnected(peer)) {
         this.setState({ type: 'live', sessionId: this.peerSessionId, role: 'requester' });
       }
       await this.record('media_first_frame');
-    } else if (!this.firstFrameSeen && this.role === 'requester' && this.remoteTrackSeen && this.peerSessionId) {
-      this.scheduleKeyframeRecovery(this.peerSessionId);
     }
     await this.record('media_stats');
     this.emit();
@@ -548,9 +517,11 @@ export class MediaSession {
   }
 
   private async resetMedia(recordCaptureStop: boolean): Promise<void> {
-    this.clearDisconnectedTimer(); this.clearKeyframeTimer();
-    if (this.restartTimer) clearTimeout(this.restartTimer); if (this.statsTimer) clearTimeout(this.statsTimer);
-    this.restartTimer = null; this.statsTimer = null;
+    this.clearDisconnectedTimer();
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    if (this.statsTimer) clearTimeout(this.statsTimer);
+    this.restartTimer = null;
+    this.statsTimer = null;
     const hadCapture = Boolean(this.localStream);
     const localTracks = this.localStream?.getTracks() ?? [];
     for (const track of localTracks) {
@@ -558,24 +529,42 @@ export class MediaSession {
       track.stop();
     }
     this.localStream = null;
-    this.remoteStream?.getTracks().forEach((track) => track.stop()); this.remoteStream = null; this.remoteStreamURL = null;
-    this.closePeer(); this.peerSessionId = null; this.role = null; this.pendingRemoteCandidates = [];
-    this.restartAttempt = 0; this.keyframeAttempt = 0; this.keyframeRequests = 0; this.keyframeForces = 0; this.bitrateParametersApplied = false;
-    this.remoteTrackSeen = false; this.firstFrameSeen = false;
-    this.acceptedLocalCandidates = 0; this.rejectedLocalCandidates = 0; this.acceptedRemoteCandidates = 0; this.rejectedRemoteCandidates = 0;
-    this.stats = null; this.previousSent = null; this.previousReceived = null;
+    this.remoteStream?.getTracks().forEach((track) => track.stop());
+    this.remoteStream = null;
+    this.remoteStreamURL = null;
+    this.closePeer();
+    this.peerSessionId = null;
+    this.role = null;
+    this.pendingRemoteCandidates = [];
+    this.restartAttempt = 0;
+    this.bitrateParametersApplied = false;
+    this.remoteTrackSeen = false;
+    this.firstFrameSeen = false;
+    this.acceptedLocalCandidates = 0;
+    this.rejectedLocalCandidates = 0;
+    this.acceptedRemoteCandidates = 0;
+    this.rejectedRemoteCandidates = 0;
+    this.stats = null;
+    this.previousSent = null;
+    this.previousReceived = null;
     this.setState({ type: 'idle' });
     if (recordCaptureStop && hadCapture) await this.record('capture_stopped');
   }
 
   private closePeer(): void {
-    const peer = this.peer; this.peer = null; if (!peer) return;
-    peer.onicecandidate = null; peer.ontrack = null; peer.onconnectionstatechange = null;
+    const peer = this.peer;
+    this.peer = null;
+    if (!peer) return;
+    peer.onicecandidate = null;
+    peer.ontrack = null;
+    peer.oniceconnectionstatechange = null;
+    peer.onconnectionstatechange = null;
+    peer.onicegatheringstatechange = null;
+    peer.onsignalingstatechange = null;
     try { peer.close(); } catch { /* already closed */ }
   }
   private requirePeer(sessionId: string): RTCPeerConnection { if (!this.peer || this.peerSessionId !== sessionId) throw new Error('No WebRTC peer for active session.'); return this.peer; }
   private clearDisconnectedTimer(): void { if (this.disconnectedTimer) clearTimeout(this.disconnectedTimer); this.disconnectedTimer = null; }
-  private clearKeyframeTimer(): void { if (this.keyframeTimer) clearTimeout(this.keyframeTimer); this.keyframeTimer = null; }
   private record(kind: DiagnosticEventKind): Promise<void> { return this.diagnostics.append(kind).catch(() => undefined); }
   private setState(next: MediaState): void { this.state = next; this.emit(); }
   private emit(): void { for (const listener of this.listeners) listener(); }
