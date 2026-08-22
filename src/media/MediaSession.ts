@@ -14,10 +14,6 @@ import {
   classifyIceCandidate,
   MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
   MEDIA_DISCONNECTED_GRACE_MS,
-  MEDIA_KEYFRAME_REQUEST_DELAYS_MS,
-  MEDIA_KEYFRAME_STEADY_RETRY_MS,
-  MEDIA_KEYFRAME_TOGGLE_MS,
-  keyframeRetryDelayMs,
   MEDIA_RESTART_DELAYS_MS,
   MEDIA_SIGNAL_RETRY_MS,
   MEDIA_STATS_INTERVAL_MS,
@@ -61,6 +57,10 @@ export interface MediaStatsSnapshot {
 export interface MediaDiagnosticSnapshot {
   state: MediaState['type'];
   role?: 'requester' | 'sharer' | undefined;
+  connectionState?: string | undefined;
+  iceConnectionState?: string | undefined;
+  iceGatheringState?: string | undefined;
+  signalingState?: string | undefined;
   remoteTrackSeen: boolean;
   firstFrameSeen: boolean;
   acceptedLocalCandidates: number;
@@ -68,9 +68,8 @@ export interface MediaDiagnosticSnapshot {
   acceptedRemoteCandidates: number;
   rejectedRemoteCandidates: number;
   restartAttempts: number;
-  keyframeRequests: number;
-  keyframeForces: number;
   bitrateParametersApplied: boolean;
+  lastFailureReason?: string | undefined;
   stats: MediaStatsSnapshot | null;
 }
 
@@ -97,6 +96,24 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+/** Snapshot the PeerConnection transport state fields for diagnostic preservation across teardown. */
+interface PeerTransportSnapshot {
+  connectionState: string;
+  iceConnectionState: string;
+  iceGatheringState: string;
+  signalingState: string;
+}
+
+function snapshotPeerTransport(peer: RTCPeerConnection | null): PeerTransportSnapshot | null {
+  if (!peer) return null;
+  return {
+    connectionState: (peer as any).connectionState ?? 'unknown',
+    iceConnectionState: (peer as any).iceConnectionState ?? 'unknown',
+    iceGatheringState: (peer as any).iceGatheringState ?? 'unknown',
+    signalingState: (peer as any).signalingState ?? 'unknown',
+  };
+}
+
 export class MediaSession {
   private state: MediaState = { type: 'idle' };
   private readonly listeners = new Set<() => void>();
@@ -109,12 +126,8 @@ export class MediaSession {
   private pendingRemoteCandidates: RTCIceCandidate[] = [];
   private disconnectedTimer: Timer | null = null;
   private restartTimer: Timer | null = null;
-  private keyframeTimer: Timer | null = null;
   private statsTimer: Timer | null = null;
   private restartAttempt = 0;
-  private keyframeAttempt = 0;
-  private keyframeRequests = 0;
-  private keyframeForces = 0;
   private bitrateParametersApplied = false;
   private remoteTrackSeen = false;
   private firstFrameSeen = false;
@@ -123,6 +136,9 @@ export class MediaSession {
   private acceptedRemoteCandidates = 0;
   private rejectedRemoteCandidates = 0;
   private stats: MediaStatsSnapshot | null = null;
+  private lastFailureReason: string | undefined = undefined;
+  // Preserved across teardown so a failed report retains the last known state.
+  private lastTransportSnapshot: PeerTransportSnapshot | null = null;
   private previousSent: ByteSample | null = null;
   private previousReceived: ByteSample | null = null;
   private operationQueue: Promise<void> = Promise.resolve();
@@ -142,21 +158,27 @@ export class MediaSession {
   getSnapshot = (): MediaState => this.state;
   getRemoteStreamURL = (): string | null => this.remoteStreamURL;
   getStatsSnapshot = (): MediaStatsSnapshot | null => this.stats;
-  getDiagnosticSnapshot = (): MediaDiagnosticSnapshot => ({
-    state: this.state.type,
-    role: this.role ?? undefined,
-    remoteTrackSeen: this.remoteTrackSeen,
-    firstFrameSeen: this.firstFrameSeen,
-    acceptedLocalCandidates: this.acceptedLocalCandidates,
-    rejectedLocalCandidates: this.rejectedLocalCandidates,
-    acceptedRemoteCandidates: this.acceptedRemoteCandidates,
-    rejectedRemoteCandidates: this.rejectedRemoteCandidates,
-    restartAttempts: this.restartAttempt,
-    keyframeRequests: this.keyframeRequests,
-    keyframeForces: this.keyframeForces,
-    bitrateParametersApplied: this.bitrateParametersApplied,
-    stats: this.stats,
-  });
+  getDiagnosticSnapshot = (): MediaDiagnosticSnapshot => {
+    const transport = snapshotPeerTransport(this.peer) ?? this.lastTransportSnapshot;
+    return {
+      state: this.state.type,
+      role: this.role ?? undefined,
+      connectionState: transport?.connectionState,
+      iceConnectionState: transport?.iceConnectionState,
+      iceGatheringState: transport?.iceGatheringState,
+      signalingState: transport?.signalingState,
+      remoteTrackSeen: this.remoteTrackSeen,
+      firstFrameSeen: this.firstFrameSeen,
+      acceptedLocalCandidates: this.acceptedLocalCandidates,
+      rejectedLocalCandidates: this.rejectedLocalCandidates,
+      acceptedRemoteCandidates: this.acceptedRemoteCandidates,
+      rejectedRemoteCandidates: this.rejectedRemoteCandidates,
+      restartAttempts: this.restartAttempt,
+      bitrateParametersApplied: this.bitrateParametersApplied,
+      lastFailureReason: this.lastFailureReason,
+      stats: this.stats,
+    };
+  };
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -288,25 +310,40 @@ export class MediaSession {
 
     peer.ontrack = (event: any) => {
       if (role !== 'requester' || this.peerSessionId !== sessionId || event.track.kind !== 'video') return;
-      const stream = event.streams?.[0] ?? new MediaStream([event.track]);
+      // Prefer the negotiated stream from event.streams[0] because the PeerConnection already
+      // owns the remote track/receiver lifecycle. Constructing a synthetic stream from a raw
+      // track alone is a known-risky path: in react-native-webrtc 124.0.8 the native MediaStream
+      // bridge may not correctly reference-count the remote receiver.
+      const stream = event.streams?.[0];
+      if (!stream) {
+        // Record the missing stream as a diagnostic rather than attempting a synthetic workaround.
+        void this.record('media_remote_track').catch(() => undefined);
+        this.lastFailureReason = 'ontrack_missing_negotiated_stream';
+        void this.enqueue(async () => {
+          if (this.peerSessionId !== sessionId) return;
+          await this.fail(sessionId, 'WebRTC delivered a remote track with no negotiated stream.', 'media_failed');
+        }).catch(() => undefined);
+        return;
+      }
       this.remoteStream = stream;
       this.remoteStreamURL = stream.toURL();
       if (!this.remoteTrackSeen) void this.record('media_remote_track');
       this.remoteTrackSeen = true;
-      this.scheduleKeyframeRecovery(sessionId);
       this.emit();
     };
 
     peer.onconnectionstatechange = () => {
       if (this.peer !== peer || this.peerSessionId !== sessionId) return;
-      const state = peer.connectionState;
+      const state = (peer as any).connectionState as string | undefined;
+      this.lastTransportSnapshot = snapshotPeerTransport(peer);
       if (state === 'connected') {
         this.clearDisconnectedTimer();
         const recovered = this.restartAttempt > 0;
         this.restartAttempt = 0;
+        // Requester becomes 'live' only when framesDecoded > 0 is witnessed in stats.
+        // ICE + aggregate connected does NOT by itself make the product session "live" for the requester.
         if (role === 'requester' && !this.firstFrameSeen) {
           this.setState({ type: 'connecting', sessionId, role });
-          if (this.remoteTrackSeen) this.scheduleKeyframeRecovery(sessionId);
         } else {
           this.setState({ type: 'live', sessionId, role });
         }
@@ -318,16 +355,37 @@ export class MediaSession {
           void this.record('media_degraded');
           this.disconnectedTimer = setTimeout(() => {
             this.disconnectedTimer = null;
-            void this.enqueue(() => this.scheduleRecovery(sessionId)).catch(() => undefined);
+            void this.enqueue(() => this.scheduleRecovery(sessionId, 'connectionState_disconnected')).catch(() => undefined);
           }, MEDIA_DISCONNECTED_GRACE_MS);
         }
         return;
       }
       if (state === 'failed') {
         this.clearDisconnectedTimer();
-        void this.enqueue(() => this.scheduleRecovery(sessionId)).catch(() => undefined);
+        void this.enqueue(() => this.scheduleRecovery(sessionId, 'connectionState_failed')).catch(() => undefined);
       }
     };
+
+    // Monitor ICE state independently. ICE failed or disconnected can happen before the aggregate
+    // connectionState reflects it, and must trigger recovery on its own.
+    (peer as any).oniceconnectionstatechange = () => {
+      if (this.peer !== peer || this.peerSessionId !== sessionId) return;
+      const iceState = (peer as any).iceConnectionState as string | undefined;
+      this.lastTransportSnapshot = snapshotPeerTransport(peer);
+      if (iceState === 'failed') {
+        this.clearDisconnectedTimer();
+        void this.enqueue(() => this.scheduleRecovery(sessionId, 'iceConnectionState_failed')).catch(() => undefined);
+      } else if (iceState === 'disconnected') {
+        if (!this.disconnectedTimer) {
+          void this.record('media_degraded');
+          this.disconnectedTimer = setTimeout(() => {
+            this.disconnectedTimer = null;
+            void this.enqueue(() => this.scheduleRecovery(sessionId, 'iceConnectionState_disconnected')).catch(() => undefined);
+          }, MEDIA_DISCONNECTED_GRACE_MS);
+        }
+      }
+    };
+
     return peer;
   }
 
@@ -354,21 +412,51 @@ export class MediaSession {
     const product = this.session.getSnapshot();
     if (product.type !== 'Connected' || product.sessionId !== message.sessionId) return;
     const sessionId = product.sessionId;
-    try {
-      if (message.type === 'MEDIA_KEYFRAME_REQUEST') { if (product.role === 'sharer') await this.forceKeyframe(sessionId); return; }
-      if (message.type === 'MEDIA_RESTART_REQUEST') { if (product.role === 'sharer') await this.restartAsSharer(sessionId); return; }
-      if (message.type === 'ICE_CANDIDATE') {
-        const decision = classifyIceCandidate(message.payload.candidate);
-        if (!decision.accepted) { this.rejectedRemoteCandidates += 1; this.emit(); return; }
-        this.acceptedRemoteCandidates += 1;
+
+    // MEDIA_KEYFRAME_REQUEST from a legacy v1 peer is accepted as a protocol-v1 compatibility
+    // no-op. The current app NEVER sends this command (libwebrtc owns RTCP PLI/FIR/keyframe
+    // behavior). We decode, validate, and discard — never toggling capture or the track.
+    if (message.type === 'MEDIA_KEYFRAME_REQUEST') {
+      // No action: libwebrtc handles keyframes via RTCP PLI/FIR. Never touch track.enabled.
+      return;
+    }
+
+    if (message.type === 'MEDIA_RESTART_REQUEST') {
+      if (product.role === 'sharer') {
+        try {
+          await this.restartAsSharer(sessionId);
+        } catch (error) {
+          this.lastFailureReason = `MEDIA_RESTART_REQUEST sharer restart failed: ${error instanceof Error ? error.message : String(error)}`;
+          await this.scheduleRecovery(sessionId, 'restart_request_failed');
+        }
+      }
+      return;
+    }
+
+    if (message.type === 'ICE_CANDIDATE') {
+      const decision = classifyIceCandidate(message.payload.candidate);
+      if (!decision.accepted) { this.rejectedRemoteCandidates += 1; this.emit(); return; }
+      this.acceptedRemoteCandidates += 1;
+      try {
         const candidate = new RTCIceCandidate(message.payload);
         const peer = this.requirePeer(sessionId);
         if (!peer.remoteDescription) this.pendingRemoteCandidates.push(candidate); else await peer.addIceCandidate(candidate);
-        this.emit();
+      } catch (error) {
+        this.lastFailureReason = `addIceCandidate failed: ${error instanceof Error ? error.message : String(error)}`;
+        this.lastTransportSnapshot = snapshotPeerTransport(this.peer);
+        // ICE candidate rejection is not session-fatal; log and continue.
+      }
+      this.emit();
+      return;
+    }
+
+    if (message.type === 'SDP_OFFER') {
+      if (product.role !== 'requester') {
+        this.lastFailureReason = 'SDP_OFFER received by non-requester';
+        await this.scheduleRecovery(sessionId, 'sdp_offer_wrong_role');
         return;
       }
-      if (message.type === 'SDP_OFFER') {
-        if (product.role !== 'requester') throw new Error('Only requester accepts a media offer.');
+      try {
         const peer = this.peerSessionId === sessionId && this.role === 'requester' ? this.requirePeer(sessionId) : this.createPeer(sessionId, 'requester');
         if (peer.getTransceivers().length === 0) peer.addTransceiver('video', { direction: 'recvonly' });
         await peer.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: message.payload.sdp }));
@@ -377,62 +465,56 @@ export class MediaSession {
         await peer.setLocalDescription(answer);
         if (!answer.sdp) throw new Error('WebRTC created an empty answer.');
         await this.session.sendMedia(sessionId, 'SDP_ANSWER', { sdp: answer.sdp });
+      } catch (error) {
+        this.lastFailureReason = `SDP_OFFER handling failed: ${error instanceof Error ? error.message : String(error)}`;
+        this.lastTransportSnapshot = snapshotPeerTransport(this.peer);
+        await this.scheduleRecovery(sessionId, 'sdp_offer_failed');
+      }
+      return;
+    }
+
+    if (message.type === 'SDP_ANSWER') {
+      if (product.role !== 'sharer') {
+        this.lastFailureReason = 'SDP_ANSWER received by non-sharer';
+        await this.scheduleRecovery(sessionId, 'sdp_answer_wrong_role');
         return;
       }
-      if (message.type === 'SDP_ANSWER') {
-        if (product.role !== 'sharer') throw new Error('Only sharer accepts a media answer.');
+      try {
         const peer = this.requirePeer(sessionId);
         await peer.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: message.payload.sdp }));
         await this.flushRemoteCandidates(peer);
-        await this.forceKeyframe(sessionId);
+        // libwebrtc handles its own keyframe/RTCP PLI behavior. No app-level keyframe action here.
+      } catch (error) {
+        this.lastFailureReason = `SDP_ANSWER handling failed: ${error instanceof Error ? error.message : String(error)}`;
+        this.lastTransportSnapshot = snapshotPeerTransport(this.peer);
+        await this.scheduleRecovery(sessionId, 'sdp_answer_failed');
       }
-    } catch {
-      if (message.type !== 'MEDIA_KEYFRAME_REQUEST') await this.scheduleRecovery(sessionId);
     }
-  }
-
-  private async forceKeyframe(sessionId: string): Promise<void> {
-    if (this.peerSessionId !== sessionId || this.role !== 'sharer') return;
-    const track = this.localStream?.getVideoTracks()[0];
-    if (!track) return;
-    this.keyframeForces += 1;
-    await this.record('media_keyframe_forced');
-    track.enabled = false;
-    await new Promise<void>((resolve) => setTimeout(resolve, MEDIA_KEYFRAME_TOGGLE_MS));
-    if (this.peerSessionId === sessionId && this.localStream?.getVideoTracks()[0] === track) track.enabled = true;
-    this.emit();
-  }
-
-  private scheduleKeyframeRecovery(sessionId: string): void {
-    if (!sessionId || this.firstFrameSeen || this.keyframeTimer || this.role !== 'requester' || this.peerSessionId !== sessionId) return;
-    const delay = keyframeRetryDelayMs(this.keyframeAttempt);
-    this.keyframeTimer = setTimeout(() => {
-      this.keyframeTimer = null;
-      void this.enqueue(async () => {
-        if (this.firstFrameSeen || this.role !== 'requester' || this.peerSessionId !== sessionId) return;
-        const product = this.session.getSnapshot();
-        if (product.type !== 'Connected' || product.sessionId !== sessionId) return;
-        if (this.keyframeAttempt < MEDIA_KEYFRAME_REQUEST_DELAYS_MS.length) this.keyframeAttempt += 1;
-        this.keyframeRequests += 1;
-        await this.record('media_keyframe_requested');
-        await this.session.sendMedia(sessionId, 'MEDIA_KEYFRAME_REQUEST', { reason: 'first_frame' }).catch(() => undefined);
-        this.emit();
-        this.scheduleKeyframeRecovery(sessionId);
-      }).catch(() => undefined);
-    }, delay);
   }
 
   private async flushRemoteCandidates(peer: RTCPeerConnection): Promise<void> {
     const pending = this.pendingRemoteCandidates.splice(0);
-    for (const candidate of pending) await peer.addIceCandidate(candidate);
+    for (const candidate of pending) {
+      try {
+        await peer.addIceCandidate(candidate);
+      } catch (error) {
+        this.lastFailureReason = `flushRemoteCandidates addIceCandidate failed: ${error instanceof Error ? error.message : String(error)}`;
+        // Candidate failures are not session-fatal; continue flushing the rest.
+      }
+    }
   }
 
-  private async scheduleRecovery(sessionId: string): Promise<void> {
+  private async scheduleRecovery(sessionId: string, reason: string): Promise<void> {
     const product = this.session.getSnapshot();
     if (product.type !== 'Connected' || product.sessionId !== sessionId || this.restartTimer) return;
-    if (this.restartAttempt >= MEDIA_RESTART_DELAYS_MS.length) { await this.fail(sessionId, 'The Wi-Fi video connection could not recover.', 'media_failed'); return; }
+    if (this.restartAttempt >= MEDIA_RESTART_DELAYS_MS.length) {
+      await this.fail(sessionId, 'The Wi-Fi video connection could not recover.', 'media_failed');
+      return;
+    }
+    this.lastTransportSnapshot = snapshotPeerTransport(this.peer);
+    if (!this.lastFailureReason) this.lastFailureReason = reason;
     const attempt = this.restartAttempt + 1;
-    const delay = MEDIA_RESTART_DELAYS_MS[this.restartAttempt];
+    const delay = MEDIA_RESTART_DELAYS_MS[this.restartAttempt]!;
     this.restartAttempt = attempt;
     this.setState({ type: 'recovering', sessionId, role: product.role, attempt });
     await this.record('media_reconnect_attempt');
@@ -444,12 +526,13 @@ export class MediaSession {
         try {
           if (current.role === 'sharer') await this.restartAsSharer(sessionId);
           else await this.session.sendMedia(sessionId, 'MEDIA_RESTART_REQUEST', { reason: 'connection_lost' });
-        } catch {
+        } catch (error) {
+          this.lastFailureReason = `recovery attempt ${attempt} send failed: ${error instanceof Error ? error.message : String(error)}`;
           if (this.restartAttempt === attempt) this.restartAttempt = attempt - 1;
           if (this.peerSessionId !== sessionId || this.restartTimer) return;
           this.restartTimer = setTimeout(() => {
             this.restartTimer = null;
-            void this.enqueue(() => this.scheduleRecovery(sessionId)).catch(() => undefined);
+            void this.enqueue(() => this.scheduleRecovery(sessionId, `signal_retry_after_attempt_${attempt}`)).catch(() => undefined);
           }, MEDIA_SIGNAL_RETRY_MS);
         }
       }).catch(() => undefined);
@@ -526,21 +609,22 @@ export class MediaSession {
       this.previousReceived = { atMs: now, bytes: receivedBytes };
     }
     this.stats = next;
+    // First-frame gating: requester becomes 'live' only when framesDecoded > 0 is witnessed.
+    // ICE/connection 'connected' state alone is not sufficient — video must be flowing.
     if (!this.firstFrameSeen && this.role === 'requester' && (next.framesDecoded ?? 0) > 0) {
       this.firstFrameSeen = true;
-      this.clearKeyframeTimer();
-      if (this.peerSessionId && this.peer?.connectionState === 'connected') {
+      if (this.peerSessionId && (this.peer as any)?.connectionState === 'connected') {
         this.setState({ type: 'live', sessionId: this.peerSessionId, role: 'requester' });
       }
       await this.record('media_first_frame');
-    } else if (!this.firstFrameSeen && this.role === 'requester' && this.remoteTrackSeen && this.peerSessionId) {
-      this.scheduleKeyframeRecovery(this.peerSessionId);
     }
     await this.record('media_stats');
     this.emit();
   }
 
   private async fail(sessionId: string, message: string, reason: 'capture_failed' | 'media_failed'): Promise<void> {
+    this.lastTransportSnapshot = snapshotPeerTransport(this.peer);
+    if (!this.lastFailureReason) this.lastFailureReason = message;
     this.setState({ type: 'error', sessionId, message });
     await this.record(reason === 'capture_failed' ? 'capture_failed' : 'media_failed');
     if (reason === 'capture_failed') await this.session.captureFailed(sessionId, 'capture_failed'); else await this.session.mediaFailed(sessionId);
@@ -548,22 +632,29 @@ export class MediaSession {
   }
 
   private async resetMedia(recordCaptureStop: boolean): Promise<void> {
-    this.clearDisconnectedTimer(); this.clearKeyframeTimer();
+    this.clearDisconnectedTimer();
     if (this.restartTimer) clearTimeout(this.restartTimer); if (this.statsTimer) clearTimeout(this.statsTimer);
     this.restartTimer = null; this.statsTimer = null;
     const hadCapture = Boolean(this.localStream);
     const localTracks = this.localStream?.getTracks() ?? [];
     for (const track of localTracks) {
+      // Clear the onended callback before stopping to prevent re-entrant capture_revoked events.
       (track as unknown as EndedAwareTrack).onended = null;
       track.stop();
     }
     this.localStream = null;
-    this.remoteStream?.getTracks().forEach((track) => track.stop()); this.remoteStream = null; this.remoteStreamURL = null;
-    this.closePeer(); this.peerSessionId = null; this.role = null; this.pendingRemoteCandidates = [];
-    this.restartAttempt = 0; this.keyframeAttempt = 0; this.keyframeRequests = 0; this.keyframeForces = 0; this.bitrateParametersApplied = false;
+    // Do NOT call stop() on remote tracks — those are owned by the PeerConnection's remote receiver.
+    // Stopping them would violate the receiver lifecycle. Clear the reference first, then close the
+    // PeerConnection which destroys the receiver/track natively.
+    this.remoteStreamURL = null;
+    this.remoteStream = null;
+    this.closePeer();
+    this.peerSessionId = null; this.role = null; this.pendingRemoteCandidates = [];
+    this.restartAttempt = 0; this.bitrateParametersApplied = false;
     this.remoteTrackSeen = false; this.firstFrameSeen = false;
     this.acceptedLocalCandidates = 0; this.rejectedLocalCandidates = 0; this.acceptedRemoteCandidates = 0; this.rejectedRemoteCandidates = 0;
     this.stats = null; this.previousSent = null; this.previousReceived = null;
+    this.lastFailureReason = undefined;
     this.setState({ type: 'idle' });
     if (recordCaptureStop && hadCapture) await this.record('capture_stopped');
   }
@@ -571,11 +662,11 @@ export class MediaSession {
   private closePeer(): void {
     const peer = this.peer; this.peer = null; if (!peer) return;
     peer.onicecandidate = null; peer.ontrack = null; peer.onconnectionstatechange = null;
+    (peer as any).oniceconnectionstatechange = null;
     try { peer.close(); } catch { /* already closed */ }
   }
   private requirePeer(sessionId: string): RTCPeerConnection { if (!this.peer || this.peerSessionId !== sessionId) throw new Error('No WebRTC peer for active session.'); return this.peer; }
   private clearDisconnectedTimer(): void { if (this.disconnectedTimer) clearTimeout(this.disconnectedTimer); this.disconnectedTimer = null; }
-  private clearKeyframeTimer(): void { if (this.keyframeTimer) clearTimeout(this.keyframeTimer); this.keyframeTimer = null; }
   private record(kind: DiagnosticEventKind): Promise<void> { return this.diagnostics.append(kind).catch(() => undefined); }
   private setState(next: MediaState): void { this.state = next; this.emit(); }
   private emit(): void { for (const listener of this.listeners) listener(); }

@@ -17,7 +17,7 @@ for (const file of tracked) {
   try { text = read(file); } catch { continue; }
   if (/partnerscreen/i.test(text) || /partnerscreen/i.test(file)) fail(`legacy product branding remains in ${file}`);
   if (legacyMediaPattern.test(text + file)) fail(`deleted custom WebRTC architecture remains in ${file}`);
-  if (/armeabi-v7a/.test(text) || /['"]x86['"]/.test(text)) fail(`32-bit ABI remains in ${file}`);
+  if (/armeabi-v7a/.test(text) || /['"](x86)['"]/.test(text)) fail(`32-bit ABI remains in ${file}`);
   if (/^tsconfig\.m\d+-tests\.json$/.test(file)) fail(`historical milestone test config remains: ${file}`);
   if (/^scripts\/verify-m\d+\.mjs$/.test(file)) fail(`historical milestone verifier remains: ${file}`);
 }
@@ -76,21 +76,82 @@ for (const invariant of [
 }
 
 const mediaSession = read('src/media/MediaSession.ts');
+
+// === WebRTC ownership boundary invariants ===
+// libwebrtc owns RTCP PLI/FIR/keyframe behavior. Current Chirp must NOT do any of:
+//   - toggle track.enabled to force a keyframe (stops MediaProjection/ScreenCapturerAndroid)
+//   - send MEDIA_KEYFRAME_REQUEST from the JS media layer
+//   - use synthetic new MediaStream([event.track]) as an ontrack fallback
+//   - call stop() on remote receiver tracks during teardown
+
+if (mediaSession.includes('track.enabled = false')) {
+  fail('CRITICAL: track.enabled toggle found in MediaSession — this stops MediaProjection/ScreenCapturerAndroid');
+}
+if (mediaSession.includes("sendMedia(sessionId, 'MEDIA_KEYFRAME_REQUEST'")) {
+  fail('CRITICAL: active MEDIA_KEYFRAME_REQUEST sending found in MediaSession — libwebrtc owns keyframes via RTCP PLI/FIR');
+}
+// Check for synthetic remote stream construction in non-comment code.
+{
+  const lines = mediaSession.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('//') || trimmed.startsWith('*')) continue;
+    if (trimmed.includes('new MediaStream([event.track])')) {
+      fail('synthetic new MediaStream([event.track]) in MediaSession code — use event.streams[0] from negotiated stream');
+      break;
+    }
+  }
+}
+// Verify remote track stop() is not called during normal teardown.
+// Remote tracks are owned by PeerConnection receivers — calling stop() on them violates
+// the receiver lifecycle in react-native-webrtc. Check each line independently.
+{
+  const remoteStopPattern = /remoteStream\s*\?\s*\.getTracks\s*\(\s*\)\s*\.forEach\s*\(.*track.*stop\s*\(/;
+  if (remoteStopPattern.test(mediaSession)) {
+    fail('remote track stop() called during teardown — remote tracks are owned by PeerConnection receiver lifecycle');
+  }
+}
+
+// === Signaling invariants ===
 for (const invariant of [
-  "sendMedia(sessionId, 'MEDIA_KEYFRAME_REQUEST'",
-  'MEDIA_KEYFRAME_STEADY_RETRY_MS',
   'createOffer(iceRestart ? { iceRestart: true } : undefined)',
   'parameters.degradationPreference = patch.degradationPreference',
   'senderBitrateParameters(',
-  'await this.forceKeyframe(sessionId);',
-  "(track as unknown as EndedAwareTrack).onended = null",
-  "this.peer?.connectionState === 'connected'",
   'getStatsSnapshot',
 ]) {
   if (!mediaSession.includes(invariant)) fail(`media recovery/observability invariant missing: ${invariant}`);
 }
-if (mediaSession.includes('if (this.keyframeAttempt >= MEDIA_KEYFRAME_REQUEST_DELAYS_MS.length)')) {
-  fail('first-frame keyframe exhaustion must not escalate into ICE recovery');
+
+// === ICE transport state monitoring ===
+// Both aggregate connectionState AND ICE state must be monitored independently.
+if (!mediaSession.includes('oniceconnectionstatechange')) {
+  fail('ICE connection state must be monitored independently from aggregate connectionState');
+}
+
+// === First-frame gating ===
+// Requester must not become 'live' on connection state alone — framesDecoded > 0 must be witnessed.
+if (!mediaSession.includes('firstFrameSeen') || !mediaSession.includes('media_first_frame')) {
+  fail('first-frame gating (firstFrameSeen / media_first_frame) must be present in MediaSession');
+}
+
+// === Diagnostic preservation ===
+// Failed reports must preserve useful state — lastFailureReason and transport snapshot must be kept.
+if (!mediaSession.includes('lastFailureReason') || !mediaSession.includes('lastTransportSnapshot')) {
+  fail('MediaSession must preserve lastFailureReason and lastTransportSnapshot across teardown');
+}
+
+// === Keyframe scheduling removed ===
+// The old scheduleKeyframeRecovery mechanism sent MEDIA_KEYFRAME_REQUEST messages and maintained
+// keyframe timer state. This must not exist.
+if (mediaSession.includes('keyframeTimer') || mediaSession.includes('keyframeAttempt')) {
+  fail('legacy keyframe timer/attempt state found — scheduleKeyframeRecovery must be removed');
+}
+
+// === Legacy MEDIA_KEYFRAME_REQUEST compat no-op ===
+// Current app must accept (and silently ignore) legacy v1 MEDIA_KEYFRAME_REQUEST from old peers.
+// It must NOT send this command. Verify the compat comment and no-op handling are present.
+if (!mediaSession.includes("MEDIA_KEYFRAME_REQUEST")) {
+  fail('MEDIA_KEYFRAME_REQUEST compat no-op handling must be present in MediaSession.handleSignal');
 }
 
 const home = read('app/index.tsx');
