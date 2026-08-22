@@ -588,13 +588,15 @@ export class PairingService {
       attempt.durableConvergenceReached = true;
       attempt.machine = transitionPairingState(attempt.machine, 'CONVERGED');
       await this.sendMessage('PAIR_COMMIT_ACK', { phase: 'converged' });
+      // Pairing owns its temporary socket until cleanup is attempted. Do not start availability/control
+      // while the QR transport is still live on the scanner role.
+      try {
+        await this.cleanupAttempt({ keepDurablePair: true, preserveState: true });
+      } catch {
+        // Durable trust already converged; transport cleanup is best effort, but ownership is released.
+      }
       await this.record('pairing_completed');
       this.setState({ kind: 'paired', pair });
-      try {
-        await this.cleanupAttempt({ keepDurablePair: true, preserveState: true, closeConnection: false });
-      } catch {
-        // Durable pair truth already converged; transport cleanup is best effort here.
-      }
       return;
     }
     throw new PairingProtocolError('Unexpected scanner finalization phase.');
@@ -607,13 +609,15 @@ export class PairingService {
     if (attempt.machine.phase === 'finalizing') {
       attempt.machine = transitionPairingState(attempt.machine, 'CONVERGED');
     }
-    await this.record('pairing_completed');
-    this.setState({ kind: 'paired', pair });
+    // Creator follows the same ownership boundary: finish the temporary pairing transport before
+    // publishing paired state, which is what activates control listener + trusted discovery.
     try {
       await this.cleanupAttempt({ keepDurablePair: true, preserveState: true });
     } catch {
       // Confirmed pair truth must not be rolled back because closing an already-terminal socket failed.
     }
+    await this.record('pairing_completed');
+    this.setState({ kind: 'paired', pair });
   }
 
   private async sendMessage(type: PairingMessageType, payload: unknown): Promise<void> {
