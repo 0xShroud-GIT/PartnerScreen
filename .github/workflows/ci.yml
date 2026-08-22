@@ -1,0 +1,22 @@
+name: Chirp CI
+
+on:
+  pull_request:
+  push:
+    branches: [chirp/clean-runtime]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+      - run: npm install --no-audit --no-fund
+      - run: npm run ci
