@@ -30,13 +30,16 @@ for permission in "${FORBIDDEN_PERMISSIONS[@]}"; do
   fi
 done
 
+# A debug React Native APK expects a Metro server and is not a standalone
+# physical-test artifact. Release mode embeds the JS/Hermes bundle while the
+# generated Expo project still uses the development signing key.
 (
   cd android
-  ./gradlew --no-daemon :app:assembleDebug
+  ./gradlew --no-daemon :app:assembleRelease
 )
 
-APK="android/app/build/outputs/apk/debug/app-debug.apk"
-OUT="dist/chirp-debug-arm64-v8a-x86_64.apk"
+APK="android/app/build/outputs/apk/release/app-release.apk"
+OUT="dist/chirp-qualification-arm64-v8a-x86_64.apk"
 test -f "$APK"
 
 APK_ANALYZER="$(command -v apkanalyzer || true)"
@@ -52,14 +55,14 @@ if [[ -n "$APK_ANALYZER" ]]; then
     fi
   done
 else
-  MERGED_MANIFEST="$(find android/app/build/intermediates -type f -name AndroidManifest.xml \( -path '*merged_manifest*' -o -path '*packaged_manifests*' \) 2>/dev/null | sort | tail -n 1 || true)"
+  MERGED_MANIFEST="$(find android/app/build/intermediates -type f -name AndroidManifest.xml \( -path '*release*merged_manifest*' -o -path '*release*packaged_manifests*' \) 2>/dev/null | sort | tail -n 1 || true)"
   if [[ -z "$MERGED_MANIFEST" ]]; then
-    echo "Unable to locate APK analyzer or merged Android manifest for permission verification." >&2
+    echo "Unable to locate APK analyzer or merged release Android manifest for permission verification." >&2
     exit 1
   fi
   for permission in "${FORBIDDEN_PERMISSIONS[@]}"; do
     if grep -Fq "$permission" "$MERGED_MANIFEST"; then
-      echo "Forbidden permission is present in merged manifest: $permission" >&2
+      echo "Forbidden permission is present in merged release manifest: $permission" >&2
       exit 1
     fi
   done
@@ -75,6 +78,13 @@ apk_path, expected_commit = sys.argv[1:]
 with zipfile.ZipFile(apk_path) as archive:
     names = set(archive.namelist())
     config = json.loads(archive.read('assets/app.config'))
+
+    bundle_name = 'assets/index.android.bundle'
+    if bundle_name not in names:
+        raise SystemExit('Standalone JS bundle is missing from APK; this build would require Metro')
+    bundle_size = archive.getinfo(bundle_name).file_size
+    if bundle_size < 100_000:
+        raise SystemExit(f'Standalone JS bundle is unexpectedly small: {bundle_size} bytes')
 
 build_commit = config.get('extra', {}).get('buildCommit')
 if build_commit != expected_commit:
@@ -96,6 +106,7 @@ for permission in ('android.permission.RECORD_AUDIO', 'android.permission.SYSTEM
     if permission not in blocked:
         raise SystemExit(f'APK app.config no longer blocks {permission}')
 
+print(f'APK standalone bundle OK: {bundle_size} bytes')
 print(f'APK identity OK: {build_commit}; ABIs={sorted(abis)}')
 PY
 
@@ -105,12 +116,14 @@ PY
   cat > BUILD_INFO.txt <<EOF
 sourceCommit=$CHIRP_BUILD_COMMIT
 package=com.chirp.app
+buildType=release
+standaloneJsBundle=assets/index.android.bundle
 abis=arm64-v8a,x86_64
 webrtc=react-native-webrtc@124.0.8
 EOF
   cat > DEVELOPMENT_ONLY.txt <<'EOF'
-Chirp development APK. Not production-signed. Built for arm64-v8a physical devices and x86_64 emulators only.
+Chirp qualification APK. Standalone release-mode bundle signed with the development key; no Metro server is required. Not for store distribution.
 EOF
 )
 
-echo "Built $OUT from $CHIRP_BUILD_COMMIT"
+echo "Built standalone $OUT from $CHIRP_BUILD_COMMIT"
