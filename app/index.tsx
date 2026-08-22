@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { router } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
   Linking,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -99,7 +99,7 @@ export default function Home() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       {sharerSessionId ? <SharerKeepAwake /> : null}
       <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
