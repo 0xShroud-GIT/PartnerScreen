@@ -11,6 +11,8 @@ import { usePairing } from '../src/presentation/usePairing';
 import { deriveProductPresentation } from '../src/presentation/ProductPresentation';
 import { useScreenCapture } from '../src/presentation/useScreenCapture';
 import { useSession } from '../src/presentation/useSession';
+import { appServices } from '../src/application/AppServices';
+import { viewerOwnership } from '../src/presentation/ViewerOwnership';
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
@@ -21,19 +23,30 @@ export default function HomeScreen() {
   const capture = useScreenCapture();
   const media = useMediaSession();
   const [draftName, setDraftName] = useState('');
+  const [notificationPermission, setNotificationPermission] = useState<string>('unknown');
   const requesterSessionId = session.state.type === 'Connected' && session.state.role === 'requester'
     ? session.state.sessionId
     : null;
 
   useEffect(() => { setDraftName(identityState.identity?.deviceName ?? ''); }, [identityState.identity?.deviceName]);
+  // P0-F: one Viewer owner per session — auto and manual converge, repeated Connected does not push duplicate
   useEffect(() => {
-    if (requesterSessionId) router.push('/viewer');
+    if (requesterSessionId) {
+      if (!viewerOwnership.isOwner(requesterSessionId)) {
+        router.push('/viewer');
+      }
+    }
   }, [requesterSessionId]);
 
   if (identityState.loading) return <View style={styles.center}><ActivityIndicator accessibilityLabel="Loading PartnerScreen" /><Text>Preparing this device…</Text></View>;
 
   const paired = pairing.state.kind === 'paired' ? pairing.state.pair : null;
   const available = paired && availability.state.kind === 'available' && availability.state.pair.pairId === paired.pairId;
+  // P0-E: foreground-owned notification permission — read state when paired/foregrounded, user initiates prompt
+  useEffect(() => {
+    if (!paired) return;
+    void appServices.requestNotificationPort.readPermissionState().then(setNotificationPermission).catch(() => setNotificationPermission('unknown'));
+  }, [paired, session.state.type]);
   let resumeRoute: '/pair/create' | '/pair/scan' | null = null;
   if (pairing.state.kind === 'creator_qr') resumeRoute = '/pair/create';
   else if (pairing.state.kind === 'waiting_partner' || pairing.state.kind === 'confirm_partner' || pairing.state.kind === 'finalizing') resumeRoute = pairing.state.role === 'creator' ? '/pair/create' : '/pair/scan';
@@ -121,7 +134,7 @@ export default function HomeScreen() {
           <Text accessibilityLiveRegion="polite" style={styles.help}>{media.state.type === 'reconnecting' && media.state.sessionId === session.state.sessionId ? `Private video interrupted. Reconnecting — attempt ${media.state.attempt}/3; not LIVE.` : media.state.type === 'negotiating' ? 'Negotiating private LAN video…' : media.state.type === 'remote_track_attached' ? 'Remote video track attached. Open the dedicated viewer.' : media.state.type === 'live' && media.state.sessionId === session.state.sessionId ? 'The remote screen is LIVE in the dedicated viewer.' : media.state.type === 'error' ? 'Video connection failed — use Retry below.' : 'Waiting for the sharing phone.'}</Text>
           {media.state.type === 'live' && media.state.sessionId === session.state.sessionId ? <Text accessibilityRole="alert" accessibilityLiveRegion="assertive" style={styles.live}>LIVE — remote screen visible</Text> : null}
           {media.state.type === 'reconnecting' && media.state.sessionId === session.state.sessionId ? <Text accessibilityLiveRegion="polite" style={styles.help}>LIVE is off while bounded LAN recovery runs. Attempt {media.state.attempt}/3.</Text> : null}
-          <Pressable accessibilityRole="button" accessibilityLabel="Open remote screen viewer" accessibilityHint="Opens the remote screen on its own full-screen view." onPress={() => router.push('/viewer')} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>Open viewer</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Open remote screen viewer" accessibilityHint="Opens the remote screen on its own full-screen view." onPress={() => { if (!requesterSessionId) return; if (viewerOwnership.isOwner(requesterSessionId)) return; router.push('/viewer'); }} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>Open viewer</Text></Pressable>
           {media.state.type === 'error' ? <Pressable accessibilityRole="button" accessibilityLabel="Retry video connection" onPress={() => { void session.recover().catch(() => undefined); }} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}><Text style={styles.secondaryText}>Retry</Text></Pressable> : null}
           <Pressable accessibilityRole="button" accessibilityLabel="Stop screen session" accessibilityHint="Ends the authenticated screen-sharing session." onPress={() => { void session.endSession(); }} style={({ pressed }) => [styles.danger, pressed && styles.pressed]}><Text style={styles.dangerText}>Stop session</Text></Pressable>
         </View> : null}
@@ -135,6 +148,28 @@ export default function HomeScreen() {
           {available ? <Pressable accessibilityRole="button" accessibilityLabel="Request partner screen again" onPress={() => { void (async () => { await session.recover().catch(() => undefined); await session.requestScreen().catch(() => undefined); })(); }} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}><Text style={styles.secondaryText}>Request Screen again</Text></Pressable> : <Text style={styles.help}>Partner is currently offline. Retry will return to offline paired state.</Text>}
         </> : null}
         <Pressable accessibilityRole="button" accessibilityLabel="Forget trusted partner" accessibilityHint="Ends active sharing and permanently removes the saved trusted relationship." onPress={forgetPartner} style={({ pressed }) => [styles.danger, pressed && styles.pressed]}><Text style={styles.dangerText}>Forget partner</Text></Pressable>
+      </View> : null}
+
+      {paired ? <View style={styles.card}>
+        <Text accessibilityRole="header" style={styles.label}>Notifications</Text>
+        <Text style={styles.help}>Allow notifications to receive screen requests while the app is in background. Denied notifications do not prevent in-app sharing.</Text>
+        <Text accessibilityLiveRegion="polite" style={styles.help}>Status: {notificationPermission}</Text>
+        {notificationPermission !== 'granted' ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Enable notifications"
+            accessibilityHint="Requests notification permission from system. Dismiss remains requestable."
+            onPress={async () => {
+              const result = await appServices.requestNotificationPort.requestPermissionFromForeground().catch(() => 'unknown');
+              setNotificationPermission(result as string);
+            }}
+            style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}
+          ><Text style={styles.secondaryText}>Enable notifications</Text></Pressable>
+        ) : (
+          <Text style={styles.help}>Notifications enabled.</Text>
+        )}
+        {notificationPermission === 'denied' ? <Text style={styles.help}>Notifications denied — in-app requests still work, but background notifications will not appear.</Text> : null}
+        {notificationPermission === 'channel_disabled' ? <Text style={styles.help}>Notification channel disabled — enable in system settings.</Text> : null}
       </View> : null}
 
       {pairing.state.kind === 'error' ? <Text accessibilityRole="alert" style={styles.error}>{pairing.state.message}</Text> : null}
