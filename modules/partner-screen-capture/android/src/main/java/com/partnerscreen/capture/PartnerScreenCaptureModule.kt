@@ -19,6 +19,7 @@ class PartnerScreenCaptureModule : Module() {
   private var pendingGrant: CaptureGrant? = null
   private val bridgeListener: (Map<String, Any>) -> Unit = { event -> sendEvent("onPartnerScreenCaptureEvent", event) }
   private val mediaListener = WebRtcEngine.EventListener { event -> sendEvent("onPartnerScreenMediaEvent", event) }
+  private val rendererListener: (Map<String, Any>) -> Unit = { event -> sendEvent("onPartnerScreenMediaEvent", event) }
 
   override fun definition() = ModuleDefinition {
     Name("PartnerScreenCapture")
@@ -33,6 +34,7 @@ class PartnerScreenCaptureModule : Module() {
     OnCreate {
       CaptureBridge.listener = bridgeListener
       WebRtcEngine.getInstance().setEventListener(mediaListener)
+      RendererTelemetryBridge.listener = rendererListener
     }
 
     AsyncFunction("requestConsent") { promise: Promise ->
@@ -148,6 +150,7 @@ class PartnerScreenCaptureModule : Module() {
     OnDestroy {
       clearPendingConsent()
       if (CaptureBridge.listener === bridgeListener) CaptureBridge.listener = null
+      if (RendererTelemetryBridge.listener === rendererListener) RendererTelemetryBridge.listener = null
       WebRtcEngine.getInstance().setEventListener(null)
     }
   }

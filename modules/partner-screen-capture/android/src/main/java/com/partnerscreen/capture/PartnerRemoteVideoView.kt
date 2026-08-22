@@ -28,25 +28,27 @@ class PartnerRemoteVideoView(context: Context, appContext: AppContext) : ExpoVie
   fun bindSession(sessionId: String) {
     if (released) return
     if (boundSessionId != sessionId) {
+      val previousSessionId = boundSessionId
       WebRtcEngine.getInstance().detachRenderer(renderer)
+      if (!previousSessionId.isNullOrBlank()) RendererTelemetryBridge.emitDetached(previousSessionId)
       boundSessionId = sessionId
       firstFrameSent = false
     }
-    if (sessionId.isNotBlank() && isAttachedToWindow) {
-      WebRtcEngine.getInstance().attachRenderer(sessionId, renderer)
-    }
+    if (sessionId.isNotBlank() && isAttachedToWindow) attachCurrentRenderer(sessionId)
   }
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
     val sessionId = boundSessionId
-    if (!released && !sessionId.isNullOrBlank()) {
-      WebRtcEngine.getInstance().attachRenderer(sessionId, renderer)
-    }
+    if (!released && !sessionId.isNullOrBlank()) attachCurrentRenderer(sessionId)
   }
 
   override fun onDetachedFromWindow() {
-    if (!released) WebRtcEngine.getInstance().detachRenderer(renderer)
+    if (!released) {
+      val sessionId = boundSessionId
+      WebRtcEngine.getInstance().detachRenderer(renderer)
+      if (!sessionId.isNullOrBlank()) RendererTelemetryBridge.emitDetached(sessionId)
+    }
     super.onDetachedFromWindow()
   }
 
@@ -54,7 +56,12 @@ class PartnerRemoteVideoView(context: Context, appContext: AppContext) : ExpoVie
     val sessionId = boundSessionId ?: return
     if (firstFrameSent) return
     firstFrameSent = true
-    post { if (!released && boundSessionId == sessionId) onFirstFrame(mapOf("sessionId" to sessionId)) }
+    post {
+      if (!released && boundSessionId == sessionId) {
+        RendererTelemetryBridge.emitAttached(sessionId)
+        onFirstFrame(mapOf("sessionId" to sessionId))
+      }
+    }
   }
 
   override fun onFrameResolutionChanged(videoWidth: Int, videoHeight: Int, rotation: Int) {
@@ -67,7 +74,7 @@ class PartnerRemoteVideoView(context: Context, appContext: AppContext) : ExpoVie
           "height" to videoHeight,
           "rotation" to rotation,
         ))
-        WebRtcEngine.getInstance().noteRendererGeometry(sessionId, videoWidth, videoHeight, rotation)
+        RendererTelemetryBridge.emitGeometry(sessionId, videoWidth, videoHeight, rotation)
         renderer.requestLayout()
         invalidate()
       }
@@ -77,9 +84,17 @@ class PartnerRemoteVideoView(context: Context, appContext: AppContext) : ExpoVie
   fun release() {
     if (released) return
     released = true
+    val sessionId = boundSessionId
     WebRtcEngine.getInstance().detachRenderer(renderer)
+    if (!sessionId.isNullOrBlank()) RendererTelemetryBridge.emitDetached(sessionId)
     boundSessionId = null
     firstFrameSent = false
     renderer.release()
+  }
+
+  private fun attachCurrentRenderer(sessionId: String) {
+    if (WebRtcEngine.getInstance().attachRenderer(sessionId, renderer)) {
+      RendererTelemetryBridge.emitAttached(sessionId)
+    }
   }
 }
