@@ -5,6 +5,8 @@ import android.view.ViewGroup
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 
@@ -12,9 +14,14 @@ class PartnerRemoteVideoView(context: Context, appContext: AppContext) : ExpoVie
   private val onFirstFrame by EventDispatcher()
   private val onFrameResolution by EventDispatcher()
   private val renderer = SurfaceViewRenderer(context)
-  private var boundSessionId: String? = null
-  private var firstFrameSent = false
-  private var released = false
+  private val bindingExecutor = Executors.newSingleThreadExecutor { runnable ->
+    Thread(runnable, "PartnerScreenRendererBinding").apply { isDaemon = true }
+  }
+  @Volatile private var boundSessionId: String? = null
+  @Volatile private var boundTrackEpoch = 0
+  @Volatile private var firstFrameSent = false
+  @Volatile private var released = false
+  @Volatile private var bindingGeneration = 0L
 
   init {
     val engine = WebRtcEngine.getInstance()
@@ -29,25 +36,32 @@ class PartnerRemoteVideoView(context: Context, appContext: AppContext) : ExpoVie
     if (released) return
     if (boundSessionId != sessionId) {
       val previousSessionId = boundSessionId
-      WebRtcEngine.getInstance().detachRenderer(renderer)
-      if (!previousSessionId.isNullOrBlank()) RendererTelemetryBridge.emitDetached(previousSessionId)
+      bindingGeneration += 1
       boundSessionId = sessionId
       firstFrameSent = false
+      if (!previousSessionId.isNullOrBlank()) queueDetach(previousSessionId)
     }
-    if (sessionId.isNotBlank() && isAttachedToWindow) attachCurrentRenderer(sessionId)
+    if (sessionId.isNotBlank() && isAttachedToWindow) queueAttach(sessionId)
+  }
+
+  fun bindTrackEpoch(trackEpoch: Int) {
+    if (released) return
+    if (boundTrackEpoch != trackEpoch) {
+      boundTrackEpoch = trackEpoch
+      firstFrameSent = false
+    }
   }
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
     val sessionId = boundSessionId
-    if (!released && !sessionId.isNullOrBlank()) attachCurrentRenderer(sessionId)
+    if (!released && !sessionId.isNullOrBlank()) queueAttach(sessionId)
   }
 
   override fun onDetachedFromWindow() {
     if (!released) {
       val sessionId = boundSessionId
-      WebRtcEngine.getInstance().detachRenderer(renderer)
-      if (!sessionId.isNullOrBlank()) RendererTelemetryBridge.emitDetached(sessionId)
+      if (!sessionId.isNullOrBlank()) queueDetach(sessionId)
     }
     super.onDetachedFromWindow()
   }
@@ -84,17 +98,47 @@ class PartnerRemoteVideoView(context: Context, appContext: AppContext) : ExpoVie
   fun release() {
     if (released) return
     released = true
+    bindingGeneration += 1
     val sessionId = boundSessionId
-    WebRtcEngine.getInstance().detachRenderer(renderer)
-    if (!sessionId.isNullOrBlank()) RendererTelemetryBridge.emitDetached(sessionId)
     boundSessionId = null
     firstFrameSent = false
-    renderer.release()
+    try {
+      bindingExecutor.execute {
+        WebRtcEngine.getInstance().detachRenderer(renderer)
+        if (!sessionId.isNullOrBlank()) RendererTelemetryBridge.emitDetached(sessionId)
+        try { renderer.release() } catch (_: Exception) { }
+        bindingExecutor.shutdown()
+      }
+    } catch (_: RejectedExecutionException) {
+      // A repeated teardown must never block the Android UI thread.
+    }
   }
 
-  private fun attachCurrentRenderer(sessionId: String) {
-    if (WebRtcEngine.getInstance().attachRenderer(sessionId, renderer)) {
-      RendererTelemetryBridge.emitAttached(sessionId)
+  private fun queueAttach(sessionId: String) {
+    val generation = bindingGeneration
+    try {
+      bindingExecutor.execute {
+        if (released || generation != bindingGeneration || boundSessionId != sessionId) return@execute
+        val attached = WebRtcEngine.getInstance().attachRenderer(sessionId, renderer)
+        if (attached && !released && generation == bindingGeneration && boundSessionId == sessionId) {
+          RendererTelemetryBridge.emitAttached(sessionId)
+        } else if (attached) {
+          WebRtcEngine.getInstance().detachRenderer(renderer)
+        }
+      }
+    } catch (_: RejectedExecutionException) {
+      // View teardown already owns renderer cleanup.
+    }
+  }
+
+  private fun queueDetach(sessionId: String) {
+    try {
+      bindingExecutor.execute {
+        WebRtcEngine.getInstance().detachRenderer(renderer)
+        RendererTelemetryBridge.emitDetached(sessionId)
+      }
+    } catch (_: RejectedExecutionException) {
+      // View teardown already owns renderer cleanup.
     }
   }
 }
