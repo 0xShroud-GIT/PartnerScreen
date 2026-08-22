@@ -102,6 +102,6 @@ export async function recoverFromError(): Promise<void> {
 
 export const appServices = {
   clock, diagnosticsRepository, identityRepository, localIdentityService, pairTrustRepository, pairingService,
-  availabilityService, controlSession, sessionController, screenCaptureCoordinator, mediaSessionController,
+  availabilityService, controlSession, sessionController, screenCaptureCoordinator, mediaSessionController, webRtcMediaPort,
   incomingRequestNotifier, requestNotificationPort, lifecyclePort, keepAwakePort, pipPort, recoverFromError,
 };
