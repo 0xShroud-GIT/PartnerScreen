@@ -22,7 +22,6 @@ export function useSession() {
       await appServices.mediaSession.stop();
       await appServices.sessionController.endSession(expectedSessionId);
     },
-    clearError: () => appServices.sessionController.clearError(),
     recover: () => recoverFromError(),
   };
 }
