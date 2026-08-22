@@ -12,16 +12,17 @@ import type { SessionState } from '../session/SessionState';
 import {
   captureResolutionScale,
   classifyIceCandidate,
+  MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
   MEDIA_DISCONNECTED_GRACE_MS,
   MEDIA_KEYFRAME_REQUEST_DELAYS_MS,
   MEDIA_KEYFRAME_STEADY_RETRY_MS,
   MEDIA_KEYFRAME_TOGGLE_MS,
+  keyframeRetryDelayMs,
   MEDIA_RESTART_DELAYS_MS,
   MEDIA_SIGNAL_RETRY_MS,
   MEDIA_STATS_INTERVAL_MS,
   SCREEN_FPS,
-  SCREEN_MAX_BITRATE_BPS,
-  SCREEN_MIN_BITRATE_BPS,
+  senderBitrateParameters,
 } from './MediaPolicy';
 
 export type MediaState =
@@ -176,21 +177,28 @@ export class MediaSession {
       await this.record('capture_consent_requested');
 
       let stream: MediaStream;
-      try {
-        const screen = Dimensions.get('screen');
-        const pixelRatio = PixelRatio.get();
-        const scale = captureResolutionScale(screen.width * pixelRatio, screen.height * pixelRatio);
-        stream = await mediaDevices.getDisplayMedia({
-          video: { frameRate: SCREEN_FPS },
-          audio: false,
-          android: { createConfigForDefaultDisplay: true, resolutionScale: scale },
-        } as never);
-      } catch {
+      const screen = Dimensions.get('screen');
+      const pixelRatio = PixelRatio.get();
+      const scale = captureResolutionScale(screen.width * pixelRatio, screen.height * pixelRatio);
+      const consent = mediaDevices.getDisplayMedia({
+        video: { frameRate: SCREEN_FPS },
+        audio: false,
+        android: { createConfigForDefaultDisplay: true, resolutionScale: scale },
+      } as never);
+      const consentResult = await Promise.race([
+        consent.then((granted) => ({ granted: true as const, stream: granted })),
+        new Promise<{ granted: false }>((resolve) => setTimeout(() => resolve({ granted: false }), MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS)),
+      ]);
+      if (!consentResult.granted) {
+        // Bounded fail-closed: the consent dialog did not settle. If Android grants late, stop the
+        // orphaned capture so no projection leaks; a fresh request can be made on a new session.
+        void consent.then((late) => late.getTracks().forEach((track) => track.stop())).catch(() => undefined);
         this.setState({ type: 'error', sessionId, message: 'Android screen sharing permission was not granted.' });
         await this.record('capture_consent_denied');
         await this.session.captureDenied(sessionId, 'system_denied');
         return;
       }
+      stream = consentResult.stream;
 
       const track = stream.getVideoTracks()[0];
       if (!track) {
@@ -212,7 +220,13 @@ export class MediaSession {
 
       const peer = this.createPeer(sessionId, 'sharer');
       const sender = peer.addTrack(track, stream);
-      await this.configureSender(sender);
+      try {
+        await this.configureSender(sender);
+      } catch {
+        // Preferred bitrate/fps parameters are a quality preference, never a session blocker. If the
+        // native sender refuses them, continue sharing rather than failing the whole screen share.
+        await this.record('media_bitrate_parameters_failed');
+      }
       this.setState({ type: 'connecting', sessionId, role: 'sharer' });
       await this.record('media_negotiation_started');
       await this.sendOffer(sessionId, false);
@@ -319,16 +333,11 @@ export class MediaSession {
 
   private async configureSender(sender: ReturnType<RTCPeerConnection['addTrack']>): Promise<void> {
     const parameters = sender.getParameters() as any;
-    if (!Array.isArray(parameters.encodings) || parameters.encodings.length === 0) parameters.encodings = [{}];
-    for (const encoding of parameters.encodings) {
-      encoding.minBitrate = SCREEN_MIN_BITRATE_BPS;
-      encoding.maxBitrate = SCREEN_MAX_BITRATE_BPS;
-      encoding.maxFramerate = SCREEN_FPS;
-      encoding.scaleResolutionDownBy = 1;
-      encoding.active = true;
-    }
-    parameters.degradationPreference = 'maintain-resolution';
-    await sender.setParameters(parameters);
+    const patch = senderBitrateParameters(parameters?.encodings as ReadonlyArray<Record<string, unknown>> | undefined);
+    if (!patch.applicable) return; // no encodings yet; do not fabricate a mismatched encoding array
+    parameters.encodings = patch.encodings;
+    parameters.degradationPreference = patch.degradationPreference;
+    await sender.setParameters(parameters as never);
     this.bitrateParametersApplied = true;
     this.emit();
   }
@@ -396,8 +405,7 @@ export class MediaSession {
 
   private scheduleKeyframeRecovery(sessionId: string): void {
     if (!sessionId || this.firstFrameSeen || this.keyframeTimer || this.role !== 'requester' || this.peerSessionId !== sessionId) return;
-    const initialAttempt = this.keyframeAttempt < MEDIA_KEYFRAME_REQUEST_DELAYS_MS.length;
-    const delay = initialAttempt ? MEDIA_KEYFRAME_REQUEST_DELAYS_MS[this.keyframeAttempt] : MEDIA_KEYFRAME_STEADY_RETRY_MS;
+    const delay = keyframeRetryDelayMs(this.keyframeAttempt);
     this.keyframeTimer = setTimeout(() => {
       this.keyframeTimer = null;
       void this.enqueue(async () => {

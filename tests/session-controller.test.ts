@@ -122,6 +122,23 @@ test('availability updates must not leave Error; clearError uses the latest cach
   controller.dispose();
 });
 
+test('a transient control reconnect never terminates the active product session', async () => {
+  const { control, controller } = harness(); await controller.activatePair(pair);
+  controller.updateAvailability({ kind: 'available', pair, endpoint: { host: '192.168.1.11', port: 45001 }, serviceName: 'peer' });
+  await controller.requestScreen(); control.emit({ type: 'message', message: remote('ACCEPT_SCREEN', {}) }); await settle();
+  assert.equal(controller.getSnapshot().type, 'Connected');
+  // Control transport interruption while media stays viable must surface as reconnect, not session death.
+  control.emit({ type: 'reconnecting', sessionId, role: 'initiator', attempt: 1 }); await settle();
+  assert.equal(controller.getSnapshot().type, 'Connected');
+  control.emit({ type: 'reconnected', sessionId, role: 'initiator' }); await settle();
+  assert.equal(controller.getSnapshot().type, 'Connected');
+  assert.equal(control.closed, 0); // no teardown happened on a transient reconnect
+  // A genuine authenticated transport failure (reconnect exhausted) is the only thing that ends it.
+  control.emit({ type: 'error', code: 'transport_failed' }); await settle();
+  assert.notEqual(controller.getSnapshot().type, 'Connected');
+  controller.dispose();
+});
+
 test('endSession(expectedSessionId) only terminates the exact matching Connected session', async () => {
   const { control, controller } = harness(); await controller.activatePair(pair);
   controller.updateAvailability({ kind: 'available', pair, endpoint: { host: '192.168.1.11', port: 45001 }, serviceName: 'peer' });
