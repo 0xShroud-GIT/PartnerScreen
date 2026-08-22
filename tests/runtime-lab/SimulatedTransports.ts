@@ -14,6 +14,7 @@ type ControlRegistration = {
 export class SimulatedControlFabric {
   private nextPort = 44000;
   private readonly registrations = new Map<string, ControlRegistration>();
+  /** Native-process-owned endpoint state. A full process death clears this map. */
   private readonly serviceEndpoints = new Map<string, ControlListenerEndpoint>();
   private readonly ids = new LabIdSource('runtime-lab-control-fabric');
   discoveryFabric?: { removeServicesForHost(host: string): void };
@@ -21,17 +22,13 @@ export class SimulatedControlFabric {
   constructor(readonly network: VirtualNetwork) {}
 
   hasEndpoint(host: string, port: number): boolean {
-    return this.registrations.has(`${host}:${port}`) || this.serviceEndpoints.has(`${host}:${port}`);
+    return this.registrations.has(`${host}:${port}`) || this.serviceEndpoints.get(host)?.port === port;
   }
 
   allocate(transport: SimulatedControlTransport): ControlListenerEndpoint {
-    // If trusted presence service owns an endpoint for this host, attach to it instead of creating a new one.
     if (transport.trustedPresenceActive) {
-      const serviceKey = transport.host;
-      const existing = this.serviceEndpoints.get(serviceKey);
+      const existing = this.serviceEndpoints.get(transport.host);
       if (existing) {
-        // Attach JS transport to existing service endpoint (same host:port, same listenerId)
-        // Keep service endpoint in both maps so probe and connect succeed.
         this.registrations.set(`${existing.host}:${existing.port}`, { transport, endpoint: existing });
         return existing;
       }
@@ -46,12 +43,6 @@ export class SimulatedControlFabric {
     if (existing) return existing;
     const endpoint = { listenerId: this.ids.uuid(), host, port: this.nextPort++ };
     this.serviceEndpoints.set(host, endpoint);
-    // Also register as reachable for probe/connect
-    this.serviceEndpoints.set(`${host}:${endpoint.port}`, endpoint);
-    // Keep a dummy registration so hasEndpoint works
-    this.serviceEndpoints.set(`${host}:${endpoint.port}`, endpoint);
-    // For simplicity, also add to registrations with a placeholder transport
-    // The service's listener is not tied to a specific transport, but probe/connect should succeed via serviceEndpoints.
     return endpoint;
   }
 
@@ -61,25 +52,19 @@ export class SimulatedControlFabric {
 
   release(endpoint: ControlListenerEndpoint): void {
     this.registrations.delete(`${endpoint.host}:${endpoint.port}`);
-    // Also remove from serviceEndpoints if it matches
-    for (const [key, value] of [...this.serviceEndpoints.entries()]) {
-      if (value.listenerId === endpoint.listenerId) this.serviceEndpoints.delete(key);
-    }
+    const serviceEndpoint = this.serviceEndpoints.get(endpoint.host);
+    if (serviceEndpoint?.listenerId === endpoint.listenerId) this.serviceEndpoints.delete(endpoint.host);
   }
 
   releaseServiceEndpoint(host: string): void {
     const endpoint = this.serviceEndpoints.get(host);
     if (!endpoint) return;
     this.serviceEndpoints.delete(host);
-    this.serviceEndpoints.delete(`${endpoint.host}:${endpoint.port}`);
     this.registrations.delete(`${endpoint.host}:${endpoint.port}`);
   }
 
   makeEndpointStale(endpoint: ControlListenerEndpoint): void {
     this.release(endpoint);
-    // P0-A: stale control endpoint must not remain PairedAvailable. The discovery
-    // advertisement that proved this exact control host:port is now stale; remove it
-    // so peers receive service_lost and re-prove before becoming available again.
     this.discoveryFabric?.removeServicesForHost(endpoint.host);
   }
 
@@ -117,9 +102,7 @@ export class SimulatedControlTransport implements ControlTransport {
 
   async startTrustedPresence(): Promise<void> {
     this.trustedPresenceActive = true;
-    if (!this.fabric.getServiceEndpoint(this.host)) {
-      this.fabric.allocateServiceEndpoint(this.host);
-    }
+    if (!this.fabric.getServiceEndpoint(this.host)) this.fabric.allocateServiceEndpoint(this.host);
   }
 
   async stopTrustedPresence(): Promise<void> {
@@ -150,7 +133,6 @@ export class SimulatedControlTransport implements ControlTransport {
     const delivered = this.fabric.network.transmit('control', Buffer.byteLength(frame, 'utf8'), () => {
       link.peer.emit({ type: 'message', connectionId: link.peerConnectionId, frame });
     });
-    // TCP either eventually delivers or the connection fails; deterministic packet loss is surfaced as a transport error.
     if (!delivered) {
       this.emit({ type: 'error', code: 'connection_failed', connectionId });
       throw new Error('Simulated control send failed.');
@@ -185,15 +167,13 @@ export class SimulatedControlTransport implements ControlTransport {
     this.emit({ type: 'error', code: 'listener_failed', listenerId: endpoint.listenerId });
   }
 
+  /** Activity/UI recreation does not kill the process-scoped native listener or JS authority. */
+  recreateActivity(): void {
+    // Deliberately no transport mutation. UI lifecycle is outside the transport authority.
+  }
+
+  /** Full app-process death destroys JS callbacks, sockets, links and native-process service state. */
   killProcess(): void {
-    // P0-D: for Activity/JS recreation while native alive, the service keeps the listener.
-    // For true process death, JS is destroyed but native START_STICKY service reconstructs
-    // the listener from persisted state. In lab, trusted presence keeps the native endpoint
-    // alive; JS callbacks are logically detached but for the current known-regression we
-    // keep the JS subscription so the existing ControlSession can still be reached.
-    // Full process-death reconstruction with secure trust-store is documented as unproven
-    // and requires a larger native bridge (see docs/v2/TRUSTED_PRESENCE_LIFECYCLE).
-    if (this.trustedPresenceActive) return;
     const endpoint = this.endpoint;
     if (endpoint) this.fabric.release(endpoint);
     this.endpoint = null;
@@ -203,8 +183,12 @@ export class SimulatedControlTransport implements ControlTransport {
       link.peer.emit({ type: 'closed', connectionId: link.peerConnectionId });
     }
     this.callbacks.clear();
-    // Also clear service endpoint if it was owned by this host (non-trusted case, service not active)
     this.fabric.releaseServiceEndpoint(this.host);
+    this.trustedPresenceActive = false;
+  }
+
+  callbackCount(): number {
+    return this.callbacks.size;
   }
 }
 
