@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
+import { useKeepAwake } from 'expo-keep-awake';
 import { useLocalIdentity } from '../src/presentation/useLocalIdentity';
 import { usePairing } from '../src/presentation/usePairing';
 import { useAvailability } from '../src/presentation/useAvailability';
@@ -13,6 +14,11 @@ function Button({ label, onPress, secondary = false, disabled = false }: { label
       <Text style={[styles.buttonText, secondary && styles.secondaryButtonText]}>{label}</Text>
     </Pressable>
   );
+}
+
+function SharerKeepAwake() {
+  useKeepAwake('chirp-sharer');
+  return null;
 }
 
 export default function Home() {
@@ -33,6 +39,7 @@ export default function Home() {
 
   return (
     <SafeAreaView style={styles.page}>
+      {sharerSessionId ? <SharerKeepAwake /> : null}
       <View style={styles.header}>
         <Text style={styles.title}>Chirp</Text>
         <Text style={styles.subtitle}>Private screen sharing over your Wi-Fi.</Text>

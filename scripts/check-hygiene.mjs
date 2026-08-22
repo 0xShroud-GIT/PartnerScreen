@@ -39,6 +39,7 @@ const pkg = JSON.parse(read('package.json'));
 if (pkg.name !== 'chirp') fail('package name must be chirp');
 if (pkg.packageManager !== 'npm@10.9.8') fail('packageManager must pin npm@10.9.8');
 if (pkg.dependencies?.['react-native-webrtc'] !== '124.0.8') fail('react-native-webrtc must be pinned to 124.0.8');
+if (pkg.dependencies?.['expo-keep-awake'] !== '~57.0.1') fail('expo-keep-awake must remain the maintained keep-awake implementation');
 if ('react-dom' in (pkg.dependencies ?? {}) || 'react-native-web' in (pkg.dependencies ?? {}) || 'expo-dev-client' in (pkg.dependencies ?? {})) fail('web/dev-client dependencies are not allowed');
 
 const lock = JSON.parse(read('package-lock.json'));
@@ -80,6 +81,11 @@ for (const invariant of [
 ]) {
   if (!mediaSession.includes(invariant)) fail(`media recovery/observability invariant missing: ${invariant}`);
 }
+
+const home = read('app/index.tsx');
+const viewer = read('app/viewer.tsx');
+if (!home.includes("useKeepAwake('chirp-sharer')")) fail('active sharer must hold bounded Expo keep-awake ownership');
+if (!viewer.includes("useKeepAwake('chirp-viewer')")) fail('active viewer must hold bounded Expo keep-awake ownership');
 
 const plugin = read('plugins/withChirpWebRtc.js');
 for (const invariant of ['withDangerousMod', 'android.permission.RECORD_AUDIO', 'android.permission.SYSTEM_ALERT_WINDOW', 'enableMediaProjectionService = true']) {
