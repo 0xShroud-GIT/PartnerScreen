@@ -23,11 +23,35 @@ test('MediaSession archives the complete diagnostic snapshot before teardown', (
   assert.equal(source.includes('this.archivedDiagnostic = null;'), true, 'new media sessions must clear the prior archive');
 });
 
-test('capture consent uses bounded settlement helper and cleans late grants', () => {
+test('capture consent uses bounded settlement and native-disposes late or partial grants', () => {
   assert.equal(source.includes('settlePromiseWithTimeout(consent, MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS)'), true);
   assert.equal(source.includes("consentResult.status === 'rejected'"), true);
   assert.equal(source.includes("consentResult.status === 'timeout'"), true);
-  assert.equal(source.includes('late.getTracks().forEach((track) => track.stop())'), true);
+  assert.equal(source.includes('(late) => this.disposeOwnedLocalStream(late)'), true);
+  assert.equal(source.includes('this.disposeOwnedLocalStream(stream);'), true);
+  assert.equal(source.includes('stream.release()'), true);
+});
+
+test('capture adoption revalidates the same Connected sharer session after Android consent', () => {
+  assert.equal(source.includes('const currentProduct = this.session.getSnapshot();'), true);
+  assert.equal(source.includes("currentProduct.type !== 'Connected'"), true);
+  assert.equal(source.includes("currentProduct.role !== 'sharer'"), true);
+  assert.equal(source.includes('currentProduct.sessionId !== sessionId'), true);
+});
+
+test('deferred stats can mutate and rearm only while the same peer and session still own media', () => {
+  assert.equal(source.includes('await this.collectStats(peer, sessionId);'), true);
+  assert.equal(source.includes('this.peer !== peer'), true);
+  assert.equal(source.includes('this.peerSessionId !== sessionId'), true);
+  assert.equal(source.includes("product.type !== 'Connected'"), true);
+  assert.equal(source.includes('product.sessionId !== sessionId'), true);
+  assert.equal(source.includes('if (this.peer === peer && this.peerSessionId === sessionId)'), true);
+});
+
+test('confirmed reconnection cancels delayed ICE recovery and stale queued attempts are rejected', () => {
+  assert.equal(source.includes('if (this.restartTimer) clearTimeout(this.restartTimer);'), true);
+  assert.equal(source.includes('this.restartTimer = null;'), true);
+  assert.equal(source.includes('this.restartAttempt !== attempt'), true);
 });
 
 test('signaling operations record operation-specific failures', () => {
